@@ -24,8 +24,12 @@ const UI={hudToggle:$('hud-toggle'),menu:$('menu'),hud:$('hud'),modal:$('modal')
 // Las novedades se almacenan fuera de la partida para no alterar su formato ni el progreso.
 // Para cada futuro deploy: actualizar RELEASE_VERSION, añadir la entrada nueva al inicio
 // de RELEASE_HISTORY, y cambiar los archivos cacheados en sw.js.
-const RELEASE_VERSION='3.9.4.2', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
+const RELEASE_VERSION='3.9.4.3', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
 const RELEASE_HISTORY=[
+ {version:'3.9.4.3',name:'Retícula central e interacción',date:'20/11/2026',changes:[
+  'Apunta con la retícula central y pulsa MANO cuando se ilumine en verde.',
+  'También puedes tocar un objeto y pulsar MANO. La retícula tiene prioridad si apunta a un objetivo accesible.'
+ ]},
  {version:'3.9.4.2',name:'Runas, Basurero y Construcción',date:'17/11/2026',changes:[
   'Las runas ahora se engastan desde Personaje → RUNAS; la Runa de Veneno de la Viuda funciona en la espada de la mochila o hotbar.',
   'Nuevas runas de Veta para el pico y de Guardia para armaduras o escudo; engastes persistentes y runas recuperables.',
@@ -256,6 +260,8 @@ function endSwordCharge(){if(!swordCharging)return;
 function cancelSwordCharge(){swordCharging=false;swordHoldTime=0;refreshCombatUI();}
 
 const screen={w:1,h:1,dpr:1,tile:32,camX:START.x,camY:START.y};
+const HAND_REACH=2.35, CAMERA_LOOK_AHEAD=1.05;
+let handSelection=null;
 const joystick={active:false,id:null,x:0,y:0},keys=new Set();
 // Fuentes de luz del nivel actual. Solo se recalculan cuando cambian las paredes,
 // puertas, antorchas o el estrato, para no penalizar el rendimiento del móvil.
@@ -1593,11 +1599,14 @@ function glowPropsFor(l){
 }
 const currentProps=()=>[...propsFor(layer),...currentBuilt(),...nearbyWood()];
 function solid(x,y){return tileAt(x,y)!==T.FLOOR;}
+function blockedByDungeonGate(x,y){
+ if(layer!==1)return false;
+ const q=dungeonLocal(x,y);
+ return (!dungeonSealsReady()&&q.x>136.8&&q.x<138.2&&q.y>1.5&&q.y<5.6)
+  ||(!story39.gateOpen&&q.x>169.8&&q.x<171.2&&q.y>1.4&&q.y<5.6);
+}
 function canMove(x,y){const r=.255;
- if(layer===1){const q=dungeonLocal(x,y);
-  if(!dungeonSealsReady()&&q.x>136.8&&q.x<138.2&&q.y>1.5&&q.y<5.6)return false;
-  if(!story39.gateOpen&&q.x>169.8&&q.x<171.2&&q.y>1.4&&q.y<5.6)return false;
- }
+ if(blockedByDungeonGate(x,y))return false;
  const x0=Math.floor(x-r),x1=Math.floor(x+r),y0=Math.floor(y-r),y1=Math.floor(y+r);
  for(let cy=y0;cy<=y1;cy++)for(let cx=x0;cx<=x1;cx++){
   if(!hitSolidCell(cx,cy,r,x,y))continue;
@@ -1666,9 +1675,9 @@ function directionalBuilt(){
  }
  return best;
 }
-function selectedPropAt(x,y){
+function selectedPropAt(x,y,props){
  const placed=structureAt(x,y);if(placed)return placed;
- return currentProps().find(q=>!q.decorative&&Math.floor(q.x)===x&&Math.floor(q.y)===y)||null;
+ return (props??currentProps()).find(q=>!q.decorative&&Math.floor(q.x)===x&&Math.floor(q.y)===y)||null;
 }
 function nearbyAction(){
  if(targetCell){
@@ -1971,19 +1980,74 @@ function drawCreature(e,t){
  }
  if(e.id===selectedEnemy){ctx.strokeStyle='#f4cc81';ctx.lineWidth=2;ctx.strokeRect(Math.round(x-s*.47),Math.round(y-s*.56),Math.round(s*.94),Math.round(s*.80));}
 }
-// La MANO se ocupa exclusivamente de interactuar. No usa ni cambia el objeto equipado.
-function handTarget(){
- if(targetCell)return selectedPropAt(targetCell.x,targetCell.y);
- if(selectedTile)return null;
- return nearestProp(1.8);
+const releasePopup=$('release-popup');
+function canAimHand(){
+ return playing&&!paused&&releasePopup.classList.contains('hidden');
 }
-function doInteract(){
- if(!playing||paused)return;
- const p=handTarget();
- if(!p){toast('No hay nada con que interactuar. Selecciona una puerta, cofre o estación.',1950,'warning');return;}
- if(isWallStructure(p)){toast('Este muro no se utiliza: pícalo con el botón Acción.',1700,'warning');return;}
- if(distance(player.x,player.y,p.x,p.y)>2.35){toast('Acércate para interactuar.',1550,'warning');return;}
- if(!rayClear(player.x,player.y,p.x,p.y,false)){toast('Una pared bloquea la interacción.',1600,'warning');return;}
+function handPathClear(p){
+ const dx=p.x-player.x,dy=p.y-player.y;
+ let x=Math.floor(player.x),y=Math.floor(player.y);
+ const tx=Math.floor(p.x),ty=Math.floor(p.y),sx=Math.sign(dx),sy=Math.sign(dy);
+ // Comprueba cada celda que atraviesa el segmento, incluso cerca de una esquina.
+ while(x!==tx||y!==ty){
+  const nextX=x===tx?Infinity:(x+(sx>0?1:0)-player.x)/dx;
+  const nextY=y===ty?Infinity:(y+(sy>0?1:0)-player.y)/dy;
+  if(nextX===nextY&&(isHandObstacle(x+sx,y)||isHandObstacle(x,y+sy)))return false;
+  if(nextX<=nextY)x+=sx;
+  if(nextY<=nextX)y+=sy;
+  if((x!==tx||y!==ty)&&isHandObstacle(x,y))return false;
+ }
+ // Los portones narrativos bloquean movimiento aunque el terreno sea transitable.
+ if(layer===1){
+  const steps=Math.ceil(Math.hypot(dx,dy)*12);
+  for(let i=1;i<steps;i++){
+   const px=player.x+dx*i/steps,py=player.y+dy*i/steps;
+   if(Math.floor(px)===tx&&Math.floor(py)===ty)break;
+   if(blockedByDungeonGate(px,py))return false;
+  }
+ }
+ return true;
+}
+function isHandObstacle(x,y){return tileAt(x,y)!==T.FLOOR||isSolidStructure(structureAt(x,y));}
+function handTargetError(p){
+ if(!p||p.decorative)return 'Apunta o toca una puerta, cofre o estación.';
+ if(isWallStructure(p))return 'Este muro no se utiliza: pícalo con el botón Acción.';
+ if(distance(player.x,player.y,p.x,p.y)>HAND_REACH)return 'Acércate para interactuar.';
+ if(tileAt(p.x,p.y)!==T.FLOOR||!handPathClear(p))return 'Una pared bloquea la interacción.';
+ if(p.kind==='dungeonboss'){
+  if(!dungeonSealsReady())return 'Necesitas activar los dos sellos de la galería antes de desafiar a la Viuda.';
+  if(quantity('sword')<1)return 'La Viuda es demasiado peligrosa sin una espada. Abre los cofres y prepárate.';
+ }
+ return '';
+}
+function reticleTarget(props){
+ const center=screenToWorld(screen.w/2,screen.h/2);
+ // Descarta centros de cámara lejanos antes de buscar entre los objetos visibles.
+ if(distance(player.x,player.y,center.x,center.y)>HAND_REACH+Math.SQRT2)return null;
+ return selectedPropAt(Math.floor(center.x),Math.floor(center.y),props);
+}
+function tappedHandTarget(){
+ if(!handSelection||handSelection.layer!==layer||handSelection.player!==player||handSelection.cell!==targetCell)return null;
+ const p=selectedPropAt(targetCell.x,targetCell.y);
+ return p?.id===handSelection.id&&p.kind===handSelection.kind?p:null;
+}
+// La retícula tiene prioridad. El clic secundario conserva su destino explícito.
+function doInteract(explicitTarget){
+ if(!canAimHand())return;
+ const aimed=explicitTarget===undefined?reticleTarget():explicitTarget;
+ const aimError=handTargetError(aimed);
+ if(!aimError){if(explicitTarget===undefined)handSelection=null;interactWithProp(aimed);return;}
+ if(explicitTarget===undefined){
+  const tapped=tappedHandTarget();
+  if(tapped){
+   const error=handTargetError(tapped);
+   if(!error){interactWithProp(tapped);return;}
+   toast(error,1550,'warning');return;
+  }
+ }
+ toast(aimError,1550,'warning');
+}
+function interactWithProp(p){
  if(p.kind==='supplycache'){
   if(story39.openedChests.includes(p.id)){toast('Este alijo ya fue registrado. No queda nada.',1700);return;}
   story39.openedChests.push(p.id);gain('cristal',1);gain('antorcha',2);
@@ -1996,10 +2060,10 @@ function doInteract(){
  if(p.kind==='dungeonrecord'){readForeman(p.note||'foreman');return;}
  if(p.kind==='dungeoncheckpoint'){activateDungeonCheckpoint();return;}
  if(p.kind==='dungeongate'){toast(dungeonSealsReady()?'El nido está abierto. Entra con cautela.':'El portón exige activar los dos sellos antiguos.',2600,dungeonSealsReady()?'important':'warning');return;}
- if(p.kind==='dungeonboss'){if(!dungeonSealsReady()){toast('Necesitas activar los dos sellos de la galería antes de desafiar a la Viuda.',3000,'warning');return;}if(quantity('sword')<1){toast('La Viuda es demasiado peligrosa sin una espada. Abre los cofres y prepárate.',2750,'warning');return;}openStory39('widow');return;}
+ if(p.kind==='dungeonboss'){openStory39('widow');return;}
  if(p.kind==='dungeonseal'){if(p.seal){activateDungeonSeal(p);return;}if(!story39.widowDefeated){toast('El sello solo cederá cuando caiga la Viuda de Carbón.',2600,'warning');return;}story39.gateOpen=true;queueSave();toast('El sello de seda se ha desvanecido.',2000);return;}
  if(p.kind==='tree'){collectWood(p);return;}
- if(p.layer!==undefined&&structures.has(p.id)){interactBuilt(p);return;}
+ if(p.kind==='anvil'||(p.layer!==undefined&&structures.has(p.id))){interactBuilt(p);return;}
  if(Number.isInteger(p.to)){changeLevel(p);return;}
  if(p.label)toast(p.label+(p.msg?' · '+p.msg:''),2300);
 }
@@ -2063,7 +2127,7 @@ function mineWall(a){if(!inWorld(a.x,a.y)){toast('Límite del estrato: no se pue
  else if(stats.mined===1||stats.mined%17===0)toast('+'+1+' '+ore+' · '+stats.mined+' bloques excavados',1200,'common');
  if(navigator.vibrate)try{navigator.vibrate(8);}catch{}scheduleSave();
 }
-function changeLevel(p){selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();clearBlueprint();if(!Number.isInteger(p.to)||p.to<0||p.to>=LAYERS)return;
+function changeLevel(p){handSelection=null;selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();clearBlueprint();if(!Number.isInteger(p.to)||p.to<0||p.to>=LAYERS)return;
  layer=p.to;if(layer===1){seedDungeon();if(!worldLayoutVersion)learnLore('entrance');}invalidateLights();player.x=p.spawn.x;player.y=p.spawn.y;screen.camX=player.x;screen.camY=player.y;selectedTile=null;breakDamage.clear();vis=new Set();visitedLevels.add(layer);stats.transitions++;reveal();updateHud();queueSave();toast('✦ Nivel '+layer+' · '+LEVELS[layer].name,2700);checkDanger(layer);
 }
 function doAction(silent=false){
@@ -2775,6 +2839,24 @@ function drawCombatEffects(t){
  if(dodgeTime>0){const a=worldToScreen(player.x,player.y);ctx.save();ctx.globalAlpha=.25;
   ctx.fillStyle='#70d5d5';ctx.beginPath();ctx.ellipse(a.x-dodgeX*t*.46,a.y-dodgeY*t*.46,t*.34,t*.49,0,0,Math.PI*2);ctx.fill();ctx.restore();}
 }
+function drawHandReticle(t,props){
+ if(!canAimHand())return;
+ const p=reticleTarget(props),active=!handTargetError(p);
+ ctx.save();
+ ctx.globalAlpha=.75;
+ ctx.fillStyle=active?'#a5e5aa':'#eef1ef';
+ const x=Math.floor(screen.w/2),y=Math.floor(screen.h/2);
+ const size=clamp(Math.round(t*.19),5,7);
+ ctx.fillRect(x-1,y-size,2,size*2);
+ ctx.fillRect(x-size,y-1,size-1,2);
+ ctx.fillRect(x+1,y-1,size-1,2);
+ if(active){
+  const cell=worldToScreen(Math.floor(p.x),Math.floor(p.y));
+  ctx.strokeStyle='#a5e5aa';ctx.globalAlpha=.48;ctx.lineWidth=1;
+  ctx.strokeRect(Math.floor(cell.x)+1.5,Math.floor(cell.y)+1.5,t-3,t-3);
+ }
+ ctx.restore();
+}
 function render(t){const w=screen.w,h=screen.h,d=screen.dpr;ctx.setTransform(d,0,0,d,0,0);ctx.imageSmoothingEnabled=false;ctx.fillStyle='#101824';ctx.fillRect(0,0,w,h);
  const x0=Math.floor(screen.camX-w/(2*t))-1,x1=Math.ceil(screen.camX+w/(2*t))+1,y0=Math.floor(screen.camY-h/(2*t))-1,y1=Math.ceil(screen.camY+h/(2*t))+1,entities=[];
  for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
@@ -2782,7 +2864,8 @@ function render(t){const w=screen.w,h=screen.h,d=screen.dpr;ctx.setTransform(d,0
  else{ctx.fillStyle='#192430';ctx.fillRect(Math.floor(a.x),Math.floor(a.y),t+1,t+1);entities.push({kind:'wall',y:y+.92,x,yy:y,a,type:kind});}}
  for(const web of webs.values())if(web.layer===layer&&web.x>=x0-1&&web.x<=x1+1&&web.y>=y0-1&&web.y<=y1+1&&vis.has(web.x+','+web.y))drawWeb(web,t);
  for(const mob of localEnemies())if(mob.x>=x0-1&&mob.x<=x1+1&&mob.y>=y0-1&&mob.y<=y1+1)entities.push({kind:'mob',y:mob.y,p:mob});
- for(const p of currentProps())if(p.kind!=='platform'&&p.x>=x0-2&&p.x<=x1+2&&p.y>=y0-2&&p.y<=y1+2)entities.push({kind:'prop',y:isWallStructure(p)?p.y+.42:p.y,p});
+ const props=currentProps();
+ for(const p of props)if(p.kind!=='platform'&&p.x>=x0-2&&p.x<=x1+2&&p.y>=y0-2&&p.y<=y1+2)entities.push({kind:'prop',y:isWallStructure(p)?p.y+.42:p.y,p});
  for(const d of groundDrops)if(d.layer===layer&&d.x>x0-1&&d.x<x1+1&&d.y>y0-1&&d.y<y1+1)entities.push({kind:'drop',y:d.y,p:d});
  for(const d of deathBags)if(d.layer===layer&&d.x>x0-1&&d.x<x1+1&&d.y>y0-1&&d.y<y1+1)entities.push({kind:'deathbag',y:d.y,p:d});
  entities.push({kind:'player',y:player.y});entities.sort((a,b)=>a.y-b.y);
@@ -2842,6 +2925,7 @@ function render(t){const w=screen.w,h=screen.h,d=screen.dpr;ctx.setTransform(d,0
  }
  // Player's lamp is a subtle warm glow; never changes the silhouette approved in Alpha 1.
  if(lampActive()){const p=worldToScreen(player.x,player.y),rr=t*2.2,grad=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,rr);grad.addColorStop(0,'rgba(237,180,112,.10)');grad.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=grad;ctx.fillRect(p.x-rr,p.y-rr,rr*2,rr*2);}
+ drawHandReticle(t,props);
 }
 function update(dt){if(!playing||paused)return;
  dodgeCooldown=Math.max(0,dodgeCooldown-dt);
@@ -2869,7 +2953,10 @@ function update(dt){if(!playing||paused)return;
  updateCreatures(dt);
  hitFlash=Math.max(0,hitFlash-dt);impactSwing=Math.max(0,impactSwing-dt);if(dismantleFX){dismantleFX.ttl-=dt;if(dismantleFX.ttl<=0)dismantleFX=null;}blink+=dt;frameCount++;
  if(actionHeld&&pickedItem()?.id!=='sword'){actionCD-=dt;if(actionCD<=0){doAction(true);actionCD=.19+Math.max(0,.13-player.pick*.025);}}
- const f=1-Math.exp(-9*dt);screen.camX+=(clamp(player.x,-MAX+20,MAX-20)-screen.camX)*f;screen.camY+=(clamp(player.y,-MAX+12,MAX-12)-screen.camY)*f;
+ const f=1-Math.exp(-9*dt);
+ const ahead=CAMERA_LOOK_AHEAD/(Math.hypot(player.dirX,player.dirY)||1);
+ screen.camX+=(clamp(player.x+player.dirX*ahead,-MAX+20,MAX-20)-screen.camX)*f;
+ screen.camY+=(clamp(player.y+player.dirY*ahead,-MAX+12,MAX-12)-screen.camY)*f;
  if(frameCount%7===0){reveal();collectDrops();updateContext();updateHud();}
  if(layer>=5&&tileAt(player.x,player.y)===T.FLOOR&&hashInt(Math.floor(player.x),Math.floor(player.y),12)>.985){hazardClock+=dt;if(hazardClock>=.7){hp-=Math.max(2,6-Math.floor(totalArmor()/3));hazardClock=0;if(hp<=0)die();}}else hazardClock=0;
  autoSaveTime+=dt;if(autoSaveTime>9){autoSaveTime=0;queueSave();}
@@ -2934,11 +3021,12 @@ function mobileTap(el,handler){
 mobileTap(UI.dodgeBtn,()=>dodge());
 mobileTap(UI.interactBtn,()=>doInteract());
 mobileTap(UI.lampBtn,()=>{if(equippedLamp())toggleLamp(false);});
-canvas.addEventListener('contextmenu',e=>{e.preventDefault();if(playing&&!paused){const cell=pointerWorldCell(e);const pr=selectedPropAt(cell.x,cell.y);if(pr){targetCell={x:cell.x,y:cell.y};selectedTile=null;}updateContext();doInteract();}});
+canvas.addEventListener('contextmenu',e=>{e.preventDefault();if(canAimHand()){const cell=pointerWorldCell(e);const pr=selectedPropAt(cell.x,cell.y);if(pr){targetCell=cell;selectedTile=null;}updateContext();doInteract(pr);}});
 function pointerWorldCell(e){const rect=canvas.getBoundingClientRect(),p=screenToWorld(e.clientX-rect.left,e.clientY-rect.top);return{x:Math.floor(p.x),y:Math.floor(p.y)};}
 canvas.addEventListener('pointerdown',e=>{
  if(!playing||paused)return;
  const {x,y}=pointerWorldCell(e);if(!inWorld(x,y))return;
+ handSelection=null;
  const creature=chooseCreatureAt(x,y);
  if(creature){selectedEnemy=creature.id;targetCell=null;selectedTile=null;updateContext();return;}
  selectedEnemy=null;
@@ -2947,6 +3035,7 @@ canvas.addEventListener('pointerdown',e=>{
  const pr=selectedPropAt(x,y);
  if(pr){
   targetCell={x:Math.floor(pr.x),y:Math.floor(pr.y)};selectedTile=null;
+  handSelection={cell:targetCell,id:pr.id,kind:pr.kind,layer,player};
   // Solo seleccionar, incluso con el pico o una construcción equipada.
   updateContext();return;
  }
@@ -2984,7 +3073,7 @@ window.addEventListener('keydown',e=>{if(['Space','ArrowDown','ArrowUp','ArrowLe
 window.addEventListener('keyup',e=>{keys.delete(e.code);if(e.code==='KeyE'||e.code==='Space'){if(swordCharging)endSwordCharge();actionHeld=false;resetMiningFocus();}});
 window.addEventListener('blur',()=>{keys.clear();resetJoy();actionTouchId=null;actionPointerId=null;actionHeld=false;cancelSwordCharge();resetMiningFocus();if(playing&&!paused){queueSave();showModal('pause');}});
 $('pick-male').addEventListener('click',()=>setCharacter('male'));$('pick-female').addEventListener('click',()=>setCharacter('female'));
-$('btn-play').addEventListener('click',async()=>{if(await readStored()){if(!confirm('¿Generar nuevo mundo Alpha 3.9.4.2? Reemplaza la expedición actual. Se recomienda hacer un respaldo antes. La Alpha 1 y la v1.6 no cambiarán.'))return;}newGame();});
+$('btn-play').addEventListener('click',async()=>{if(await readStored()){if(!confirm('¿Generar nuevo mundo Alpha '+RELEASE_VERSION+'? Reemplaza la expedición actual. Se recomienda hacer un respaldo antes. La Alpha 1 y la v1.6 no cambiarán.'))return;}newGame();});
 $('btn-resume').addEventListener('click',async()=>{const s=await readStored();if(s)continueGame(s);else newGame();});
 UI.hudToggle.addEventListener('click',()=>{
  hudExpanded=!hudExpanded;

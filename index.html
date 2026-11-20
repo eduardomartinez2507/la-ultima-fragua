@@ -6,23 +6,23 @@
   <meta name="theme-color" content="#101521" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="description" content="La Última Fragua 2.0 Alpha 3.9.4.2: runas equipables para espada, pico y armaduras, basurero en la mochila y uniones de muros corregidas." />
-  <link rel="manifest" href="./manifest.webmanifest?v=3942" />
+  <meta name="description" content="La Última Fragua 2.0 Alpha 3.9.4.3: retícula central e interacción con objetos del mundo mediante Mano." />
+  <link rel="manifest" href="./manifest.webmanifest?v=3943" />
   <link rel="apple-touch-icon" sizes="180x180" href="./assets/apple-touch-icon-180.png?v=3922" />
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32.png?v=3922" />
   <link rel="icon" type="image/png" sizes="48x48" href="./assets/favicon-48.png?v=3922" />
-  <title>La Última Fragua 2.0 — Alpha 3.9.4.2</title>
-  <link rel="stylesheet" href="./style.css?v=3942" />
+  <title>La Última Fragua 2.0 — Alpha 3.9.4.3</title>
+  <link rel="stylesheet" href="./style.css?v=3943" />
 </head>
 <body>
-  <main id="app" aria-label="La Última Fragua 2.0 Alpha 3.9.4.2">
+  <main id="app" aria-label="La Última Fragua 2.0 Alpha 3.9.4.3">
     <canvas id="world" aria-label="Mundo de exploración cenital" tabindex="0"></canvas>
     <div id="vignette" aria-hidden="true"></div>
 
     <div id="hud" class="game-ui hidden">
       <section class="hud-panel" aria-label="Zona actual y nivel">
         <button id="hud-toggle" class="hud-toggle" type="button" aria-label="Mostrar más información" aria-expanded="false">⌄</button>
-        <div class="hud-kicker"><span class="rune">◆</span> LA ÚLTIMA FRAGUA <span class="alpha-mini">2.0 · α3.9.4.2</span></div>
+        <div class="hud-kicker"><span class="rune">◆</span> LA ÚLTIMA FRAGUA <span class="alpha-mini">2.0 · α3.9.4.3</span></div>
         <div class="hud-line"><span id="location-name">Tierras de Khaz’dûn</span><span id="step-meter">NIVEL 0</span></div>
         <div id="hud-subzone" class="hud-subzone">Refugio del Alba</div>
         <button id="btn-progression" class="hud-xp-button" type="button" aria-label="Abrir habilidades del personaje" title="Progresión y habilidades"><span id="xp-level">NV 1</span><span class="xp-hud-track"><i id="xp-fill"></i></span><small id="xp-label">0/80 XP</small></button>
@@ -76,7 +76,7 @@
             <img class="lamp-btn-art" src="./assets/items/lampara.png" alt="" aria-hidden="true" draggable="false" decoding="async">
             <span class="lamp-indicator" aria-hidden="true"></span>
           </button>
-          <button id="btn-interact" class="interact-btn" type="button" aria-label="Mano: interactuar con el objeto seleccionado" title="Mano · interactuar (F)">
+          <button id="btn-interact" class="interact-btn" type="button" aria-label="Mano: interactuar con el objeto apuntado o seleccionado" title="Mano · interactuar (F)">
             <svg class="hand-pixel" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" shape-rendering="crispEdges"><path fill="#91683f" d="M8 3h3v9h1V2h3v10h1V4h3v10h2v5h-2v3H9v-2H7v-3H5v-5h3z"/><path fill="#f4c68c" d="M8 2h3v10h1V1h3v11h1V3h3v11h2v4h-2v3H9v-2H7v-3H5v-4h3z"/><path fill="#d9a16c" d="M9 14h2v4h2v2H9v-2H7v-3H6v-2h3z"/><path fill="#fff0c7" d="M9 3h1v8H9zm4 0h1v8h-1zm4 2h1v8h-1z"/></svg>
             <span>MANO</span>
           </button>
@@ -131,22 +131,21 @@
         <h1>LA ÚLTIMA <strong>FRAGUA</strong></h1>
         <div class="ornament"><span></span><b>◆</b><span></span></div>
         <p class="menu-subtitle">Explora, excava y sobrevive a las criaturas de las profundidades.</p>
-        <div class="alpha-note">2.0 <span>ALPHA 3.9.4.2</span> · RUNAS · BASURERO · FORJA</div>
-        <p class="intro-text">Selecciona tocando el mundo. Usa MANO para abrir puertas y cofres; ACCIÓN para picar o construir con la hotbar. Explora ocho estratos cenitales.</p>
+        <div class="alpha-note">2.0 <span>ALPHA 3.9.4.3</span> · RETÍCULA CENTRAL</div>
+        <p class="intro-text">Apunta con la retícula o toca un objeto y pulsa MANO. Usa ACCIÓN para picar o construir con la hotbar. Explora ocho estratos cenitales.</p>
         <p class="menu-label">ELIGE TU PERSONAJE</p>
         <div class="character-grid">
           <button id="pick-male" class="character-option selected" data-character="male" aria-pressed="true"><span class="avatar-icon">⚒</span><span>ENANO</span><small>Minero de Khaz'dûn</small></button>
           <button id="pick-female" class="character-option" data-character="female" aria-pressed="false"><span class="avatar-icon">✦</span><span>ENANA</span><small>Minera de Khaz'dûn</small></button>
         </div>
         <div class="menu-buttons"><button id="btn-play" class="primary-btn">⚒ &nbsp; GENERAR NUEVO REINO</button><button id="btn-resume" class="secondary-btn hidden">↻ &nbsp; CONTINUAR EXPEDICIÓN</button></div>
-        <div class="small-print">ALPHA 3.9.4.2 · Engastes de runas, inventario mejorado, construcciones y Novedades en Ajustes. La v1.6 sigue intacta.</div>
       </div>
     </section>
 
     <section id="modal" class="overlay panel-overlay hidden" aria-label="Panel del juego" role="dialog" aria-modal="true">
-      <div class="panel-card"><div class="panel-header"><div><span class="panel-eyebrow">LA ÚLTIMA FRAGUA · ALPHA 3.9.4.2</span><h2 id="modal-title">Pausa</h2></div><button id="modal-close" class="square-btn close-button" aria-label="Cerrar">✕</button></div><div id="modal-body"></div></div>
+      <div class="panel-card"><div class="panel-header"><div><span class="panel-eyebrow">LA ÚLTIMA FRAGUA · ALPHA 3.9.4.3</span><h2 id="modal-title">Pausa</h2></div><button id="modal-close" class="square-btn close-button" aria-label="Cerrar">✕</button></div><div id="modal-body"></div></div>
     </section>
   </main>
-  <input id="import-file" type="file" accept="application/json,.json" hidden /><script defer src="./game.js?v=3942"></script>
+  <input id="import-file" type="file" accept="application/json,.json" hidden /><script defer src="./game.js?v=3943"></script>
 </body>
 </html>
