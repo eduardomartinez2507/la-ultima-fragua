@@ -24,8 +24,12 @@ const UI={hudToggle:$('hud-toggle'),menu:$('menu'),hud:$('hud'),modal:$('modal')
 // Las novedades se almacenan fuera de la partida para no alterar su formato ni el progreso.
 // Para cada futuro deploy: actualizar RELEASE_VERSION, añadir la entrada nueva al inicio
 // de RELEASE_HISTORY, y cambiar los archivos cacheados en sw.js.
-const RELEASE_VERSION='3.9.4.3', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
+const RELEASE_VERSION='3.9.4.4', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
 const RELEASE_HISTORY=[
+ {version:'3.9.4.4',name:'Optimización del HUD de exploración',date:'20/11/2026',changes:[
+  'Minimapa abajo a la derecha, con el norte fijo y una flecha que refleja la orientación del personaje.',
+  'La barra rápida adapta sus ocho espacios al ancho disponible y los datos de la zona se pueden plegar.'
+ ]},
  {version:'3.9.4.3',name:'Retícula central e interacción',date:'20/11/2026',changes:[
   'Apunta con la retícula central y pulsa MANO cuando se ilumine en verde.',
   'También puedes tocar un objeto y pulsar MANO. La retícula tiene prioridad si apunta a un objetivo accesible.'
@@ -181,7 +185,7 @@ function skillsPanel(){
 const distance=(a,b,c,d)=>Math.hypot(a-c,b-d);
 const hashInt=(x,y,k=0)=>{let n=(Math.imul(x+423,374761393)+Math.imul(y+169,668265263)+Math.imul(seed+91+k*7,982451653))|0;n=Math.imul(n^(n>>>13),1274126177);return((n^(n>>>16))>>>0)/4294967295};
 let seed=57813,worldLayoutVersion=0,layer=0,chunkCache=new Map(),mined=new Map(),fog=new Map(),vis=new Set(),player={x:.5,y:.5,gender:'male',dirX:0,dirY:1,face:'down',walk:0,steps:0},stats={mined:0,explored:0,visits:0,transitions:0},ores={},visitedLevels=new Set([0]),currentToast='',selectedTile=null,highlightProp=null;
-let hudExpanded=false,playing=false,paused=true,selCharacter='male',modalType='',actionHeld=false,actionCD=0,breakDamage=new Map(),hitFlash=0,toastUntil=0,lastTs=0,blink=0,autoSaveTime=0,frameCount=0,saveChain=Promise.resolve(),db=null,saveReady=false,lastActionVisual='';
+let playing=false,paused=true,selCharacter='male',modalType='',actionHeld=false,actionCD=0,breakDamage=new Map(),hitFlash=0,toastUntil=0,lastTs=0,blink=0,autoSaveTime=0,frameCount=0,saveChain=Promise.resolve(),db=null,saveReady=false,lastActionVisual='';
 // Alpha 3.7 — creature state, persistent cobwebs and combat target (no new save key).
 let enemies=new Map(),defeatedEnemies=new Set(),webs=new Map(),selectedEnemy=null;
 // Alpha 3.9.4.1: geografía determinista por semilla; 0 preserva TODOS los mapas antiguos.
@@ -1627,30 +1631,18 @@ function fitViewport(){
  root.style.setProperty('--view-top',Math.round(vv?.offsetTop||0)+'px');
  const portrait=h>w, compact=h<510||w<800||portrait, tight=h<340||w<440;
  const topButton=clamp(Math.floor(h*.115),38,compact?44:50);
- const gap=compact?5:8;
- const actionRow=topButton*4+gap*3;
- const hudAvail=Math.max(86,w-actionRow-34);
- const hudWidth=Math.min(tight?200:compact?268:320,hudAvail);
- const joystickSize=clamp(Math.round(h*.285),82,portrait?118:124);
- const actionSize=clamp(Math.round(joystickSize*.73),62,94);
- const handSize=clamp(Math.round(actionSize*.78),46,70);
- const controlGap=compact?6:9;
- const controlStart=w-16-actionSize-handSize-controlGap;
- const joyEnd=15+joystickSize+9;
- const freeSpace=Math.max(170,controlStart-joyEnd-14);
- const hotbarSlot=clamp(Math.floor((freeSpace-36)/8),24,48);
- const hotbarWidth=hotbarSlot*8+7*3+12;
- const preferredCenter=w/2;
- const center=clamp(preferredCenter,joyEnd+hotbarWidth/2+5,controlStart-hotbarWidth/2-5);
+ const joystickSize=clamp(Math.round(Math.min(h*.25,w*.26)),72,portrait?104:120);
+ const actionSize=clamp(Math.round(joystickSize*.74),56,88);
+ const handSize=clamp(Math.round(actionSize*.8),44,68);
  root.classList.toggle('ui-compact',compact);
  root.classList.toggle('ui-tight',tight);
  root.classList.toggle('ui-portrait',portrait);
+ root.classList.toggle('ui-short',h<=560);
  const props={
-  '--hud-width':hudWidth+'px','--top-btn':topButton+'px','--top-gap':gap+'px',
-  '--joystick-size':joystickSize+'px','--action-size':actionSize+'px','--hand-size':handSize+'px','--dodge-size':Math.max(38,Math.round(handSize*.79))+'px','--lamp-size':Math.max(42,Math.round(actionSize*.58))+'px','--action-gap':controlGap+'px',
-  '--hotbar-slot':(portrait?48:hotbarSlot)+'px','--hotbar-shift':(portrait?0:center-w/2)+'px',
-  '--toast-top':(topButton+(compact?17:22))+'px',
-  '--controls-opacity':'.75','--mini-size':(portrait?74:compact?82:96)+'px'
+  '--top-btn':topButton+'px','--top-gap':(compact?5:8)+'px',
+  '--joystick-size':joystickSize+'px','--action-size':actionSize+'px','--hand-size':handSize+'px',
+  '--dodge-size':Math.max(38,Math.round(handSize*.79))+'px','--lamp-size':Math.max(38,Math.round(actionSize*.58))+'px',
+  '--mini-size':clamp(Math.round(h*.195),54,compact?74:88)+'px'
  };
  for(const [key,val] of Object.entries(props))root.style.setProperty(key,val);
 }
@@ -2324,7 +2316,7 @@ function drawMiniMap(){
   if(Math.hypot(x-center,y-center)<center-7){g.fillStyle='#e37879';g.fillRect(Math.round(x)-2,Math.round(y)-2,4,4);}
  }
  // Flecha que gira según la dirección de movimiento del personaje.
- const dx=player.dirX||0,dy=player.dirY||1,a=Math.atan2(dy,dx);
+ const a=player.dirX||player.dirY?Math.atan2(player.dirY,player.dirX):Math.PI/2;
  g.save();g.translate(center,center);g.rotate(a);g.fillStyle='#f8ebbf';g.beginPath();g.moveTo(7,0);g.lineTo(-5,-4);g.lineTo(-2,0);g.lineTo(-5,4);g.closePath();g.fill();g.restore();
 }
 function drawMap(){const c=$('exploration-map');if(!c)return;const g=c.getContext('2d');g.imageSmoothingEnabled=false;g.fillStyle='#090e16';g.fillRect(0,0,c.width,c.height);
@@ -3076,8 +3068,8 @@ $('pick-male').addEventListener('click',()=>setCharacter('male'));$('pick-female
 $('btn-play').addEventListener('click',async()=>{if(await readStored()){if(!confirm('¿Generar nuevo mundo Alpha '+RELEASE_VERSION+'? Reemplaza la expedición actual. Se recomienda hacer un respaldo antes. La Alpha 1 y la v1.6 no cambiarán.'))return;}newGame();});
 $('btn-resume').addEventListener('click',async()=>{const s=await readStored();if(s)continueGame(s);else newGame();});
 UI.hudToggle.addEventListener('click',()=>{
- hudExpanded=!hudExpanded;
- UI.hud.classList.toggle('hud-expanded',hudExpanded);
+ const hudExpanded=!UI.hudToggle.matches('[aria-expanded="true"]');
+ $('hud-details').classList.toggle('hidden',!hudExpanded);
  UI.hudToggle.setAttribute('aria-expanded',String(hudExpanded));
  UI.hudToggle.setAttribute('aria-label',hudExpanded?'Reducir información':'Mostrar más información');
  UI.hudToggle.textContent=hudExpanded?'⌃':'⌄';
