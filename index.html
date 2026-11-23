@@ -6,69 +6,77 @@
   <meta name="theme-color" content="#101521" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="description" content="La Última Fragua 2.0 Alpha 3.9.4.2: runas equipables para espada, pico y armaduras, basurero en la mochila y uniones de muros corregidas." />
-  <link rel="manifest" href="./manifest.webmanifest?v=3942" />
+  <meta name="description" content="La Última Fragua 2.0 Alpha 3.9.4.6: Construcción sobre suelo natural y pisos, con planos de estructuras y revestimientos independientes." />
+  <link rel="manifest" href="./manifest.webmanifest?v=3946" />
   <link rel="apple-touch-icon" sizes="180x180" href="./assets/apple-touch-icon-180.png?v=3922" />
   <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon-32.png?v=3922" />
   <link rel="icon" type="image/png" sizes="48x48" href="./assets/favicon-48.png?v=3922" />
-  <title>La Última Fragua 2.0 — Alpha 3.9.4.2</title>
-  <link rel="stylesheet" href="./style.css?v=3942" />
+  <title>La Última Fragua 2.0 — Alpha 3.9.4.6</title>
+  <link rel="stylesheet" href="./style.css?v=3946" />
 </head>
 <body>
-  <main id="app" aria-label="La Última Fragua 2.0 Alpha 3.9.4.2">
+  <main id="app" aria-label="La Última Fragua 2.0 Alpha 3.9.4.6">
     <canvas id="world" aria-label="Mundo de exploración cenital" tabindex="0"></canvas>
     <div id="vignette" aria-hidden="true"></div>
 
     <div id="hud" class="game-ui hidden">
-      <section class="hud-panel" aria-label="Zona actual y nivel">
-        <button id="hud-toggle" class="hud-toggle" type="button" aria-label="Mostrar más información" aria-expanded="false">⌄</button>
-        <div class="hud-kicker"><span class="rune">◆</span> LA ÚLTIMA FRAGUA <span class="alpha-mini">2.0 · α3.9.4.2</span></div>
-        <div class="hud-line"><span id="location-name">Tierras de Khaz’dûn</span><span id="step-meter">NIVEL 0</span></div>
-        <div id="hud-subzone" class="hud-subzone">Refugio del Alba</div>
-        <button id="btn-progression" class="hud-xp-button" type="button" aria-label="Abrir habilidades del personaje" title="Progresión y habilidades"><span id="xp-level">NV 1</span><span class="xp-hud-track"><i id="xp-fill"></i></span><small id="xp-label">0/80 XP</small></button>
-        <div class="hud-hint" id="quest-line">Descubre minas y abre túneles</div><div class="hud-hint" id="resource-line">Pico inicial · 0 bloques picados</div>
-      </section>
-      <div class="top-actions" role="group" aria-label="Menú del juego">
-        <button class="square-btn hud-icon-btn" id="btn-pack" aria-label="Abrir bolsa e inventario" title="Bolsa e inventario"><img src="./assets/ui/hud_bag.png" alt="" draggable="false"></button>
-        <button class="square-btn hud-icon-btn" id="btn-craft" aria-label="Abrir forja y recetas" title="Forja y recetas"><img src="./assets/ui/hud_forge.png" alt="" draggable="false"></button>
-        <button class="square-btn hud-icon-btn" id="btn-journal" aria-label="Abrir Diario de Khaz’dûn" title="Diario"><img src="./assets/ui/hud_journal.png" alt="" draggable="false"></button>
-        <button class="square-btn hud-icon-btn" id="btn-pause" aria-label="Abrir ajustes y sistema" title="Ajustes"><img src="./assets/ui/hud_settings.png" alt="" draggable="false"></button>
-      </div>
-      <button id="btn-map" class="hud-minimap" type="button" aria-label="Abrir mapa grande" title="Tocar para abrir el mapa">
-        <span class="mini-compass" aria-hidden="true">N</span>
-        <canvas id="mini-map" width="128" height="128" aria-hidden="true"></canvas>
-        <span class="mini-level" id="mini-level" aria-hidden="true">0</span>
-      </button>
-      <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
-      <div id="context-info" class="context-info hidden" aria-live="off"><span id="context-icon">✦</span><span id="context-text"></span></div>
-      <div id="blueprint-toolbar" class="blueprint-toolbar hidden" aria-label="Editor de planos">
-        <div class="blueprint-controls" role="group" aria-label="Forma del plano">
-          <span class="blueprint-title">▤ PLANO</span>
-          <button type="button" data-plan-mode="line" class="selected">TRAZO</button>
-          <button type="button" data-plan-mode="room">CUARTO</button>
-          <button type="button" data-plan-mode="area">ÁREA</button>
+      <div class="hud-top">
+        <section class="hud-panel" aria-label="Zona actual y nivel">
+          <button id="hud-toggle" class="hud-toggle" type="button" aria-label="Mostrar más información" aria-expanded="false" aria-controls="hud-details">⌄</button>
+          <div class="hud-line"><span id="location-name">Tierras de Khaz’dûn</span><span id="step-meter">NIVEL 0</span></div>
+          <div id="hud-subzone" class="hud-subzone">Refugio del Alba</div>
+          <button id="btn-progression" class="hud-xp-button" type="button" aria-label="Abrir habilidades del personaje" title="Progresión y habilidades"><span id="xp-level">NV 1</span><span class="xp-hud-track"><i id="xp-fill"></i></span><small id="xp-label">0/80 XP</small></button>
+          <div id="hud-details" class="hidden">
+            <div class="hud-hint" id="quest-line">Descubre minas y abre túneles</div>
+            <div class="hud-hint" id="resource-line">Pico inicial · 0 bloques picados</div>
+          </div>
+        </section>
+        <div class="top-actions" role="group" aria-label="Menú del juego">
+          <button class="square-btn hud-icon-btn" id="btn-pack" aria-label="Abrir bolsa e inventario" title="Bolsa e inventario"><img src="./assets/ui/hud_bag.png" alt="" draggable="false"></button>
+          <button class="square-btn hud-icon-btn" id="btn-craft" aria-label="Abrir forja y recetas" title="Forja y recetas"><img src="./assets/ui/hud_forge.png" alt="" draggable="false"></button>
+          <button class="square-btn hud-icon-btn" id="btn-journal" aria-label="Abrir Diario de Khaz’dûn" title="Diario"><img src="./assets/ui/hud_journal.png" alt="" draggable="false"></button>
+          <button class="square-btn hud-icon-btn" id="btn-pause" aria-label="Abrir ajustes y sistema" title="Ajustes"><img src="./assets/ui/hud_settings.png" alt="" draggable="false"></button>
         </div>
-        <div class="blueprint-bottom">
-          <span id="blueprint-status" class="blueprint-status" aria-live="polite">Toca o arrastra para dibujar</span>
-          <button id="blueprint-undo" type="button" class="blueprint-undo">↶ DESHACER</button>
-          <button id="blueprint-cancel" type="button" class="blueprint-cancel">✕ CANCELAR</button>
-          <button id="blueprint-confirm" type="button" class="blueprint-confirm">✓ CONSTRUIR</button>
+        <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+        <div id="context-info" class="context-info hidden" aria-live="off"><span id="context-icon">✦</span><span id="context-text"></span></div>
+        <div id="blueprint-toolbar" class="blueprint-toolbar hidden" aria-label="Editor de planos">
+          <div class="blueprint-controls" role="group" aria-label="Forma del plano">
+            <span class="blueprint-title">▤ PLANO</span>
+            <button type="button" data-plan-mode="line" class="selected">TRAZO</button>
+            <button type="button" data-plan-mode="room">CUARTO</button>
+            <button type="button" data-plan-mode="area">ÁREA</button>
+          </div>
+          <div class="blueprint-bottom">
+            <span id="blueprint-status" class="blueprint-status" aria-live="polite">Toca o arrastra para dibujar</span>
+            <button id="blueprint-undo" type="button" class="blueprint-undo">↶ DESHACER</button>
+            <button id="blueprint-cancel" type="button" class="blueprint-cancel">✕ CANCELAR</button>
+            <button id="blueprint-confirm" type="button" class="blueprint-confirm">✓ CONSTRUIR</button>
+          </div>
         </div>
       </div>
       <div class="bottom-ui">
-        <div id="joystick" class="joystick" aria-label="Joystick virtual de movimiento" role="group">
-          <div class="joystick-ring"></div><div id="joystick-knob" class="joystick-knob"></div>
-          <span class="joystick-label">MOVER</span>
-        </div>
-        <div id="hotbar" class="bottom-center hotbar" role="group" aria-label="Barra rápida de ocho objetos"></div>
-        <div id="status-bars" class="status-bars" aria-label="Vida y aguante del personaje">
-          <div class="vital-heart" aria-hidden="true"><span>♥</span></div>
-          <div class="vital-data">
-            <div class="status-row health-row" aria-label="Vida"><span class="status-caption">PV</span><div class="status-track"><div id="health-fill"></div></div><strong id="health-label">100</strong></div>
-            <div class="status-row stamina-row" aria-label="Aguante"><span class="status-caption">EN</span><div class="status-track"><div id="stamina-fill"></div></div><strong id="stamina-label">100</strong></div>
+        <div class="movement-hud">
+          <div id="joystick" class="joystick" aria-label="Joystick virtual de movimiento" role="group">
+            <div class="joystick-ring"></div><div id="joystick-knob" class="joystick-knob"></div>
+            <span class="joystick-label">MOVER</span>
+          </div>
+          <div id="status-bars" class="status-bars" aria-label="Vida y aguante del personaje">
+            <div class="vital-heart" aria-hidden="true"><span>♥</span></div>
+            <div class="vital-data">
+              <div class="status-row health-row" aria-label="Vida"><span class="status-caption">PV</span><div class="status-track"><div id="health-fill"></div></div><strong id="health-label">100</strong></div>
+              <div class="status-row stamina-row" aria-label="Aguante"><span class="status-caption">EN</span><div class="status-track"><div id="stamina-fill"></div></div><strong id="stamina-label">100</strong></div>
+            </div>
           </div>
         </div>
+        <div class="hotbar-lane">
+          <div id="hotbar" class="bottom-center hotbar" role="group" aria-label="Barra rápida de ocho objetos"></div>
+        </div>
         <div class="right-actions" role="group" aria-label="Acciones del personaje">
+          <button id="btn-map" class="hud-minimap" type="button" aria-label="Abrir mapa completo" title="Tocar para abrir el mapa">
+            <span class="mini-compass" aria-hidden="true">N</span>
+            <canvas id="mini-map" width="128" height="128" aria-hidden="true"></canvas>
+            <span class="mini-level" id="mini-level" aria-hidden="true">0</span>
+          </button>
           <button id="btn-dodge" class="dodge-btn" type="button" aria-label="Esquivar (Q o Shift)" title="Esquivar · Q / Shift">
             <svg viewBox="0 0 32 32" width="27" height="27" aria-hidden="true" shape-rendering="crispEdges"><path fill="#a9e7e3" d="M8 4h9v4H8zm9 4h5v5h-5zM5 13h12v5H5zm4 5h9v4H9zm-4 4h9v4H5zm15-1h8v4h-8zM22 7h7v4h-7z"/></svg>
           </button>
@@ -76,7 +84,7 @@
             <img class="lamp-btn-art" src="./assets/items/lampara.png" alt="" aria-hidden="true" draggable="false" decoding="async">
             <span class="lamp-indicator" aria-hidden="true"></span>
           </button>
-          <button id="btn-interact" class="interact-btn" type="button" aria-label="Mano: interactuar con el objeto seleccionado" title="Mano · interactuar (F)">
+          <button id="btn-interact" class="interact-btn" type="button" aria-label="Mano: interactuar con el objeto apuntado o seleccionado" title="Mano · interactuar (F)">
             <svg class="hand-pixel" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" shape-rendering="crispEdges"><path fill="#91683f" d="M8 3h3v9h1V2h3v10h1V4h3v10h2v5h-2v3H9v-2H7v-3H5v-5h3z"/><path fill="#f4c68c" d="M8 2h3v10h1V1h3v11h1V3h3v11h2v4h-2v3H9v-2H7v-3H5v-4h3z"/><path fill="#d9a16c" d="M9 14h2v4h2v2H9v-2H7v-3H6v-2h3z"/><path fill="#fff0c7" d="M9 3h1v8H9zm4 0h1v8h-1zm4 2h1v8h-1z"/></svg>
             <span>MANO</span>
           </button>
@@ -131,22 +139,21 @@
         <h1>LA ÚLTIMA <strong>FRAGUA</strong></h1>
         <div class="ornament"><span></span><b>◆</b><span></span></div>
         <p class="menu-subtitle">Explora, excava y sobrevive a las criaturas de las profundidades.</p>
-        <div class="alpha-note">2.0 <span>ALPHA 3.9.4.2</span> · RUNAS · BASURERO · FORJA</div>
-        <p class="intro-text">Selecciona tocando el mundo. Usa MANO para abrir puertas y cofres; ACCIÓN para picar o construir con la hotbar. Explora ocho estratos cenitales.</p>
+        <div class="alpha-note">2.0 <span>ALPHA 3.9.4.6</span> · CONSTRUCCIÓN SOBRE PISOS</div>
+        <p class="intro-text">Apunta con la retícula o toca un objeto y pulsa MANO. Usa ACCIÓN para picar o construir con la hotbar. Explora ocho estratos cenitales.</p>
         <p class="menu-label">ELIGE TU PERSONAJE</p>
         <div class="character-grid">
           <button id="pick-male" class="character-option selected" data-character="male" aria-pressed="true"><span class="avatar-icon">⚒</span><span>ENANO</span><small>Minero de Khaz'dûn</small></button>
           <button id="pick-female" class="character-option" data-character="female" aria-pressed="false"><span class="avatar-icon">✦</span><span>ENANA</span><small>Minera de Khaz'dûn</small></button>
         </div>
         <div class="menu-buttons"><button id="btn-play" class="primary-btn">⚒ &nbsp; GENERAR NUEVO REINO</button><button id="btn-resume" class="secondary-btn hidden">↻ &nbsp; CONTINUAR EXPEDICIÓN</button></div>
-        <div class="small-print">ALPHA 3.9.4.2 · Engastes de runas, inventario mejorado, construcciones y Novedades en Ajustes. La v1.6 sigue intacta.</div>
       </div>
     </section>
 
     <section id="modal" class="overlay panel-overlay hidden" aria-label="Panel del juego" role="dialog" aria-modal="true">
-      <div class="panel-card"><div class="panel-header"><div><span class="panel-eyebrow">LA ÚLTIMA FRAGUA · ALPHA 3.9.4.2</span><h2 id="modal-title">Pausa</h2></div><button id="modal-close" class="square-btn close-button" aria-label="Cerrar">✕</button></div><div id="modal-body"></div></div>
+      <div class="panel-card"><div class="panel-header"><div><span class="panel-eyebrow">LA ÚLTIMA FRAGUA · ALPHA 3.9.4.6</span><h2 id="modal-title">Pausa</h2></div><button id="modal-close" class="square-btn close-button" aria-label="Cerrar">✕</button></div><div id="modal-body"></div></div>
     </section>
   </main>
-  <input id="import-file" type="file" accept="application/json,.json" hidden /><script defer src="./game.js?v=3942"></script>
+  <input id="import-file" type="file" accept="application/json,.json" hidden /><script defer src="./game.js?v=3946"></script>
 </body>
 </html>

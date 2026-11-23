@@ -24,8 +24,24 @@ const UI={hudToggle:$('hud-toggle'),menu:$('menu'),hud:$('hud'),modal:$('modal')
 // Las novedades se almacenan fuera de la partida para no alterar su formato ni el progreso.
 // Para cada futuro deploy: actualizar RELEASE_VERSION, añadir la entrada nueva al inicio
 // de RELEASE_HISTORY, y cambiar los archivos cacheados en sw.js.
-const RELEASE_VERSION='3.9.4.2', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
+const RELEASE_VERSION='3.9.4.6', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
 const RELEASE_HISTORY=[
+ {version:'3.9.4.6',name:'Construcción sobre suelo y pisos',date:'23/11/2026',changes:[
+  'Traza planos sobre suelo transitable y pisos construidos. Puedes combinar un piso y una estructura en la misma casilla.',
+  'Con el pico, toca el borde de una casilla revestida para retirar el piso sin desmontar la estructura.'
+ ]},
+ {version:'3.9.4.5',name:'Corrección de apuntado y minería',date:'20/11/2026',changes:[
+  'El pico usa la selección por toque mientras siga accesible o la casilla bajo la retícula.',
+  'Un contorno de cobre muestra la casilla que recibirá el siguiente golpe.'
+ ]},
+ {version:'3.9.4.4',name:'Optimización del HUD de exploración',date:'20/11/2026',changes:[
+  'Minimapa abajo a la derecha, con el norte fijo y una flecha que refleja la orientación del personaje.',
+  'La barra rápida adapta sus ocho espacios al ancho disponible y los datos de la zona se pueden plegar.'
+ ]},
+ {version:'3.9.4.3',name:'Retícula central e interacción',date:'20/11/2026',changes:[
+  'Apunta con la retícula central y pulsa MANO cuando se ilumine en verde.',
+  'También puedes tocar un objeto y pulsar MANO. La retícula tiene prioridad si apunta a un objetivo accesible.'
+ ]},
  {version:'3.9.4.2',name:'Runas, Basurero y Construcción',date:'17/11/2026',changes:[
   'Las runas ahora se engastan desde Personaje → RUNAS; la Runa de Veneno de la Viuda funciona en la espada de la mochila o hotbar.',
   'Nuevas runas de Veta para el pico y de Guardia para armaduras o escudo; engastes persistentes y runas recuperables.',
@@ -177,7 +193,7 @@ function skillsPanel(){
 const distance=(a,b,c,d)=>Math.hypot(a-c,b-d);
 const hashInt=(x,y,k=0)=>{let n=(Math.imul(x+423,374761393)+Math.imul(y+169,668265263)+Math.imul(seed+91+k*7,982451653))|0;n=Math.imul(n^(n>>>13),1274126177);return((n^(n>>>16))>>>0)/4294967295};
 let seed=57813,worldLayoutVersion=0,layer=0,chunkCache=new Map(),mined=new Map(),fog=new Map(),vis=new Set(),player={x:.5,y:.5,gender:'male',dirX:0,dirY:1,face:'down',walk:0,steps:0},stats={mined:0,explored:0,visits:0,transitions:0},ores={},visitedLevels=new Set([0]),currentToast='',selectedTile=null,highlightProp=null;
-let hudExpanded=false,playing=false,paused=true,selCharacter='male',modalType='',actionHeld=false,actionCD=0,breakDamage=new Map(),hitFlash=0,toastUntil=0,lastTs=0,blink=0,autoSaveTime=0,frameCount=0,saveChain=Promise.resolve(),db=null,saveReady=false,lastActionVisual='';
+let playing=false,paused=true,selCharacter='male',modalType='',actionHeld=false,actionCD=0,breakDamage=new Map(),hitFlash=0,toastUntil=0,lastTs=0,blink=0,autoSaveTime=0,frameCount=0,saveChain=Promise.resolve(),db=null,saveReady=false,lastActionVisual='';
 // Alpha 3.7 — creature state, persistent cobwebs and combat target (no new save key).
 let enemies=new Map(),defeatedEnemies=new Set(),webs=new Map(),selectedEnemy=null;
 // Alpha 3.9.4.1: geografía determinista por semilla; 0 preserva TODOS los mapas antiguos.
@@ -256,6 +272,8 @@ function endSwordCharge(){if(!swordCharging)return;
 function cancelSwordCharge(){swordCharging=false;swordHoldTime=0;refreshCombatUI();}
 
 const screen={w:1,h:1,dpr:1,tile:32,camX:START.x,camY:START.y};
+const HAND_REACH=2.35, CAMERA_LOOK_AHEAD=1.05;
+let handSelection=null,miningSelection=null;
 const joystick={active:false,id:null,x:0,y:0},keys=new Set();
 // Fuentes de luz del nivel actual. Solo se recalculan cuando cambian las paredes,
 // puertas, antorchas o el estrato, para no penalizar el rendimiento del móvil.
@@ -694,7 +712,7 @@ function nearbyWood(){if(layer!==0&&layer!==1)return[];const cx=Math.floor(playe
 function collectWood(p){const k=builtKey(layer,p.x,p.y);if(harvested.has(k))return;harvested.add(k);gain('madera',4);stats.harvested=(stats.harvested||0)+1;toast('Madera recogida (+4)',1200,'common');refreshHotbar();queueSave();}
 function pickedItem(){return inventory[slot];}
 function isBuildItem(){return !!ITEMS[pickedItem()?.id]?.place;}
-function chooseSlot(i){slot=clamp(i|0,0,7);resetMiningFocus();targetCell=null;selectedTile=null;ghostCells=[];refreshHotbar();updateContext();updateBlueprintUI();}
+function chooseSlot(i){slot=clamp(i|0,0,7);resetMiningFocus();clearAimSelection();targetCell=null;selectedTile=null;drawing=null;ghostCells=[];refreshHotbar();updateContext();updateBlueprintUI();}
 let hotbarInitialized=false;
 function refreshHotbar(){const root=$('hotbar');if(!root)return;
  const active=pickedItem();root.dataset.selectedName=active?weaponDisplayName(active.id):'Vacío';
@@ -723,9 +741,9 @@ function refreshHotbar(){const root=$('hotbar');if(!root)return;
 function isFloorItem(id){return id==='plataforma'||id==='suelopiedra';}
 function buildKind(id){return ITEMS[id]?.place||null;}
 function plannedKey(id,x,y,l=layer){return (isFloorItem(id)?'f:':'s:')+builtKey(l,x,y);}
-function placeTarget(){if(targetCell)return targetCell;
- const dx=player.dirX,dy=player.dirY,n=Math.hypot(dx,dy)||1;
- return{x:Math.floor(player.x+dx/n*1.55),y:Math.floor(player.y+dy/n*1.55)};}
+function placeTarget(){return reticleCell();}
+function builtStructureKind(kind){return kind==='woodback'?'woodwall':kind==='stoneback'?'stonewall':kind;}
+function isTerrainBlock(kind){return kind==='stone'||kind==='dirt';}
 function strokeCells(x0,y0,x1,y1,mode,id){
  const out=[],limit=16;
  x1=clamp(x1,x0-limit,x0+limit);y1=clamp(y1,y0-limit,y0+limit);
@@ -748,34 +766,33 @@ function blueprintCells(a,b,id,mode=blueprintMode){
  const allowed=isMulti?mode:'single';
  return strokeCells(a.x,a.y,b.x,b.y,allowed,id).map(q=>({...q,id,layer}));
 }
-function validateBlueprintCell(c){
+function validateBlueprintCell(c,plan,props,mobs){
  const {x,y,id}=c,k=builtKey(c.layer,x,y),kind=buildKind(id),old=structures.get(k);
- if(c.layer!==layer||!kind||!inWorld(x,y)||tileAt(x,y,c.layer)!==T.FLOOR)return false;
- if(distance(player.x,player.y,x+.5,y+.5)>BUILD_RADIUS)return false;
+ if(c.layer!==layer||!kind||!inWorld(x,y))return 'casilla fuera del estrato';
+ if(tileAt(x,y,c.layer)!==T.FLOOR||placedBlocks.has(k))return 'excava la casilla primero';
+ if(distance(player.x,player.y,x+.5,y+.5)>BUILD_RADIUS)return 'fuera de alcance';
+ if(props.some(p=>p.kind!=='tree'&&structureAt(p.x,p.y)!==p&&distance(p.x,p.y,x+.5,y+.5)<.68))return 'objeto o acceso protegido';
  if(isFloorItem(id)){
-  // Floors are walkable surfaces, but cannot replace or hide a structure.
-  // Block overlaps with both existing structures and walls/doors queued in the same plan.
-  if(old||placedBlocks.has(k)||blueprint.has('s:'+k)||ghostCells.some(g=>g.layer===c.layer&&g.x===x&&g.y===y&&!isFloorItem(g.id)))return false;
-  if(currentProps().some(p=>p.kind!=='tree'&&distance(p.x,p.y,x+.5,y+.5)<.68&&!structures.has(p.id)))return false;
-  return floorAt(x,y,c.layer)!==kind;
+  if(isTerrainBlock(buildKind(plan.get('s:'+k)?.id)))return 'un bloque macizo no admite piso';
+  return floorAt(x,y,c.layer)===kind?'ya existe ese piso':'';
  }
- // Do not allow a new wall or furniture on top of a planned floor in the same blueprint.
- if(blueprint.has('f:'+k)||ghostCells.some(g=>g.layer===c.layer&&g.x===x&&g.y===y&&isFloorItem(g.id)))return false;
- if(distance(player.x,player.y,x+.5,y+.5)<.8)return false;
- if(old){if(old.kind===kind)return false;
-  if(!(isWallStructure(old)||old.kind==='door')||!['woodback','stoneback','door'].includes(kind))return false;
- }
- if(kind==='stone'||kind==='dirt'){
-  if(placedBlocks.has(k))return false;
- }
- if(currentProps().some(p=>p.layer===undefined||p.layer===layer ? distance(p.x,p.y,x+.5,y+.5)<.68 && p.kind!=='tree' && !structures.has(p.id):false))return false;
- return true;
+ const terrain=isTerrainBlock(kind),nextKind=builtStructureKind(kind);
+ if(terrain&&(floorAt(x,y,c.layer)||plan.has('f:'+k)))return 'retira el piso antes de colocar un bloque macizo';
+ if(old&&(old.kind===nextKind||!(isWallStructure(old)||old.kind==='door')||!isSolidStructure({kind:nextKind})))return 'casilla ocupada por otra estructura';
+ if((terrain||isSolidStructure({kind:nextKind}))&&hitSolidCell(x,y,.255,player.x,player.y))return 'bloquearía al personaje';
+ if(mobs.some(p=>hitSolidCell(x,y,.255,p.x,p.y)))return 'casilla ocupada por un enemigo';
+ if(blockedByDungeonGate(x+.5,y+.5))return 'acceso protegido';
+ return '';
 }
 function draftSummary(entries=[...blueprint.values()]){
- const need={};let invalid=0;
- for(const c of entries){need[c.id]=(need[c.id]||0)+1;if(!validateBlueprintCell(c))invalid++;}
+ const need={},reasons=new Set(),props=propsFor(layer),mobs=localEnemies();let invalid=0;
+ for(const c of entries){
+  need[c.id]=(need[c.id]||0)+1;
+  const reason=validateBlueprintCell(c,blueprint,props,mobs);
+  if(reason){invalid++;reasons.add(reason);}
+ }
  const missing=Object.entries(need).filter(([id,n])=>quantity(id)<n).map(([id,n])=>`${ITEMS[id].name} ${quantity(id)}/${n}`);
- return{need,invalid,missing,total:entries.length};
+ return{need,invalid,reasons:[...reasons],missing,total:entries.length};
 }
 function updateBlueprintUI(){
  if(!blueUI.root)return;
@@ -785,31 +802,37 @@ function updateBlueprintUI(){
  if(UI.toast.textContent.includes('Toca una pared')){UI.toast.classList.remove('visible');toastUntil=0;}
  blueUI.root.querySelectorAll('[data-plan-mode]').forEach(b=>{b.classList.toggle('selected',b.dataset.planMode===blueprintMode);b.disabled=!item||!['paredpiedra','paredmadera','plataforma','suelopiedra'].includes(item.id);});
  const data=draftSummary(),lines=Object.entries(data.need).map(([id,n])=>`${ITEMS[id].name} ×${n}`);
- blueUI.status.textContent=data.total?`${data.total} piezas · ${lines.join(', ')}${data.invalid?' · '+data.invalid+' sin sitio':''}${data.missing.length?' · faltan '+data.missing.join(', '):''}`:'Toca o arrastra sobre el mapa para dibujar';
+ const status=data.total?[data.reasons.join(', '),data.missing.length?'Faltan '+data.missing.join(', '):'',data.total+' piezas · '+lines.join(', ')].filter(Boolean).join(' · '):'Toca o arrastra sobre el mapa para dibujar';
+ if(blueUI.status.textContent!==status)blueUI.status.textContent=blueUI.status.title=status;
  blueUI.confirm.disabled=!data.total||!!data.invalid||!!data.missing.length;
  blueUI.confirm.textContent=data.total?`✓ CONSTRUIR (${data.total})`:'✓ CONSTRUIR';
  blueUI.cancel.disabled=!data.total;
  const undo=$('blueprint-undo');if(undo)undo.disabled=!blueprintHistory.length;
+ return data;
 }
 function addBlueprint(a,b=a){
  const id=pickedItem()?.id;
  if(!buildKind(id))return;
  const cells=blueprintCells(a,b,id);
- if(blueprint.size+cells.length>BLUEPRINT_MAX){toast('Plano muy grande. Máximo '+BLUEPRINT_MAX+' piezas.',1800,'warning');return;}
+ const added=cells.filter(c=>!blueprint.has(plannedKey(c.id,c.x,c.y,c.layer))).length;
+ if(blueprint.size+added>BLUEPRINT_MAX){ghostCells=[];toast('Plano muy grande. Máximo '+BLUEPRINT_MAX+' piezas.',1800,'warning');return;}
  if(cells.length){blueprintHistory.push(new Map(blueprint));if(blueprintHistory.length>20)blueprintHistory.shift();}
  for(const c of cells){
   const k=plannedKey(c.id,c.x,c.y,c.layer),other=blueprint.get(k);
   if(other&&other.id===c.id)continue;
   blueprint.set(k,c);
  }
- ghostCells=[];targetCell=null;updateBlueprintUI();scheduleSave();
+ ghostCells=[];targetCell=null;
+ const result=updateBlueprintUI();
+ if(result?.invalid)toast('Plano inválido · '+result.reasons.join(' · '),2500,'warning');
+ scheduleSave();
 }
 function undoBlueprint(){if(!blueprintHistory.length)return;blueprint=blueprintHistory.pop();ghostCells=[];updateBlueprintUI();scheduleSave();}
 function clearBlueprint(){blueprint.clear();blueprintHistory=[];ghostCells=[];drawing=null;targetCell=null;updateBlueprintUI();scheduleSave();}
 function confirmBlueprint(){
  const entries=[...blueprint.values()],result=draftSummary(entries);
  if(!result.total)return;
- if(result.invalid){toast('Corrige las casillas marcadas en rojo o cancela el plano.',2200,'warning');return;}
+ if(result.invalid){toast('Plano inválido · '+result.reasons.join(' · '),2500,'warning');return;}
  if(result.missing.length){toast('Faltan materiales: '+result.missing.join(', '),2500,'warning');return;}
  const bag=inventory.map(it=>it?{...it}:null);
  for(const [id,n]of Object.entries(result.need))if(!removeFrom(bag,id,n))return;
@@ -818,7 +841,7 @@ function confirmBlueprint(){
   const {x,y,id}=c,k=builtKey(c.layer,x,y),kind=buildKind(id);
   if(isFloorItem(id)){
    const prev=floorTiles.get(k);
-   if(prev)refunds.push({id:prev==='platform'?'plataforma':'suelopiedra',x,y});
+   if(prev){refunds.push({id:prev==='platform'?'plataforma':'suelopiedra',x,y});dismantleDamage.delete(floorDismantleKey(x,y));}
    floorTiles.set(k,kind);continue;
   }
   const old=structures.get(k);
@@ -826,10 +849,10 @@ function confirmBlueprint(){
    refunds.push({id:old.kind==='woodwall'?'paredmadera':old.kind==='stonewall'?'paredpiedra':'puerta',x,y});
    structures.delete(k);dismantleDamage.delete('s:'+k);
   }
-  if(kind==='stone'||kind==='dirt'){
+  if(isTerrainBlock(kind)){
    setTile(x,y,kind==='stone'?T.ROCK:T.SOFT);placedBlocks.set(k,id);
   }else{
-   const structKind=kind==='woodback'?'woodwall':kind==='stoneback'?'stonewall':kind;
+   const structKind=builtStructureKind(kind);
    const p={x:x+.5,y:y+.5,layer,kind:structKind,id:k,open:false,storage:kind==='chest'?Array(16).fill(null):undefined};
    structures.set(k,p);
    if(kind==='banner')mainBase=k;
@@ -842,8 +865,8 @@ function confirmBlueprint(){
  toast('Fortaleza: '+entries.length+' piezas construidas.',1900);
 }
 function tryBuild(){
- const q=placeTarget();if(!buildKind(pickedItem()?.id))return false;
- addBlueprint(q);return true;
+ if(drawing||!buildKind(pickedItem()?.id))return false;
+ addBlueprint(placeTarget());return true;
 }
 function floorAt(x,y,l=layer){return floorTiles.get(builtKey(l,x,y));}
 function liftFloor(x,y){const k=builtKey(layer,x,y),floor=floorTiles.get(k);if(!floor)return false;
@@ -957,7 +980,7 @@ function collectDrops(){let changed=false;for(let i=groundDrops.length-1;i>=0;i-
  for(let i=deathBags.length-1;i>=0;i--){const b=deathBags[i];if(b.layer!==layer||distance(player.x,player.y,b.x,b.y)>1.2)continue;
  const remaining=[];for(const q of b.items){let n=storeIn(inventory,q.id,q.n);if(n)remaining.push(makeStack(q.id,n));}b.items=remaining;
  if(!remaining.length){deathBags.splice(i,1);toast('Recuperaste tu mochila de expedición.',1900);}changed=true;}if(changed){refreshHotbar();scheduleSave();}}
-function die(){selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();const pack=[];for(let i=2;i<inventory.length;i++){let it=inventory[i];if(!it||ITEMS[it.id]?.max===1)continue;
+function die(){clearAimSelection();selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();const pack=[];for(let i=2;i<inventory.length;i++){let it=inventory[i];if(!it||ITEMS[it.id]?.max===1)continue;
  let count=Math.floor(it.n*.30);if(count){pack.push(makeStack(it.id,count));it.n-=count;if(!it.n)inventory[i]=null;}}
  if(pack.length)deathBags.push({layer,x:player.x,y:player.y,items:pack});stats.deaths=(stats.deaths||0)+1;hp=100;
  layer=respawn.layer;player.x=respawn.x;player.y=respawn.y;if(!canMove(player.x,player.y))player.x=.5,player.y=.5;
@@ -1161,6 +1184,7 @@ function sceneSteps(type){
 }
 function openStory39(type,replay=false){
  if(!playing)return;
+ clearAimSelection();
  if(modalType)closeModal();
  paused=true;resetJoy();cancelSwordCharge();
  storyScene={type,replay,index:0,steps:sceneSteps(type)};$('story-overlay').classList.remove('hidden');
@@ -1593,11 +1617,14 @@ function glowPropsFor(l){
 }
 const currentProps=()=>[...propsFor(layer),...currentBuilt(),...nearbyWood()];
 function solid(x,y){return tileAt(x,y)!==T.FLOOR;}
+function blockedByDungeonGate(x,y){
+ if(layer!==1)return false;
+ const q=dungeonLocal(x,y);
+ return (!dungeonSealsReady()&&q.x>136.8&&q.x<138.2&&q.y>1.5&&q.y<5.6)
+  ||(!story39.gateOpen&&q.x>169.8&&q.x<171.2&&q.y>1.4&&q.y<5.6);
+}
 function canMove(x,y){const r=.255;
- if(layer===1){const q=dungeonLocal(x,y);
-  if(!dungeonSealsReady()&&q.x>136.8&&q.x<138.2&&q.y>1.5&&q.y<5.6)return false;
-  if(!story39.gateOpen&&q.x>169.8&&q.x<171.2&&q.y>1.4&&q.y<5.6)return false;
- }
+ if(blockedByDungeonGate(x,y))return false;
  const x0=Math.floor(x-r),x1=Math.floor(x+r),y0=Math.floor(y-r),y1=Math.floor(y+r);
  for(let cy=y0;cy<=y1;cy++)for(let cx=x0;cx<=x1;cx++){
   if(!hitSolidCell(cx,cy,r,x,y))continue;
@@ -1606,6 +1633,12 @@ function canMove(x,y){const r=.255;
 }
 function worldToScreen(x,y){return{x:(x-screen.camX)*screen.tile+screen.w/2,y:(y-screen.camY)*screen.tile+screen.h/2};}
 function screenToWorld(x,y){return{x:(x-screen.w/2)/screen.tile+screen.camX,y:(y-screen.h/2)/screen.tile+screen.camY};}
+function screenCell(x,y){
+ const p=screenToWorld(x,y);
+ return{x:Math.floor(p.x),y:Math.floor(p.y)};
+}
+function reticlePoint(){return{x:Math.floor(screen.w/2),y:Math.floor(screen.h/2)};}
+function reticleCell(){const {x,y}=reticlePoint();return screenCell(x,y);}
 // Use the actual *visible* viewport (browser toolbars included), not a phone model or a fixed CSS breakpoint.
 function fitViewport(){
  const vv=window.visualViewport;
@@ -1618,30 +1651,18 @@ function fitViewport(){
  root.style.setProperty('--view-top',Math.round(vv?.offsetTop||0)+'px');
  const portrait=h>w, compact=h<510||w<800||portrait, tight=h<340||w<440;
  const topButton=clamp(Math.floor(h*.115),38,compact?44:50);
- const gap=compact?5:8;
- const actionRow=topButton*4+gap*3;
- const hudAvail=Math.max(86,w-actionRow-34);
- const hudWidth=Math.min(tight?200:compact?268:320,hudAvail);
- const joystickSize=clamp(Math.round(h*.285),82,portrait?118:124);
- const actionSize=clamp(Math.round(joystickSize*.73),62,94);
- const handSize=clamp(Math.round(actionSize*.78),46,70);
- const controlGap=compact?6:9;
- const controlStart=w-16-actionSize-handSize-controlGap;
- const joyEnd=15+joystickSize+9;
- const freeSpace=Math.max(170,controlStart-joyEnd-14);
- const hotbarSlot=clamp(Math.floor((freeSpace-36)/8),24,48);
- const hotbarWidth=hotbarSlot*8+7*3+12;
- const preferredCenter=w/2;
- const center=clamp(preferredCenter,joyEnd+hotbarWidth/2+5,controlStart-hotbarWidth/2-5);
+ const joystickSize=clamp(Math.round(Math.min(h*.25,w*.26)),72,portrait?104:120);
+ const actionSize=clamp(Math.round(joystickSize*.74),56,88);
+ const handSize=clamp(Math.round(actionSize*.8),44,68);
  root.classList.toggle('ui-compact',compact);
  root.classList.toggle('ui-tight',tight);
  root.classList.toggle('ui-portrait',portrait);
+ root.classList.toggle('ui-short',h<=560);
  const props={
-  '--hud-width':hudWidth+'px','--top-btn':topButton+'px','--top-gap':gap+'px',
-  '--joystick-size':joystickSize+'px','--action-size':actionSize+'px','--hand-size':handSize+'px','--dodge-size':Math.max(38,Math.round(handSize*.79))+'px','--lamp-size':Math.max(42,Math.round(actionSize*.58))+'px','--action-gap':controlGap+'px',
-  '--hotbar-slot':(portrait?48:hotbarSlot)+'px','--hotbar-shift':(portrait?0:center-w/2)+'px',
-  '--toast-top':(topButton+(compact?17:22))+'px',
-  '--controls-opacity':'.75','--mini-size':(portrait?74:compact?82:96)+'px'
+  '--top-btn':topButton+'px','--top-gap':(compact?5:8)+'px',
+  '--joystick-size':joystickSize+'px','--action-size':actionSize+'px','--hand-size':handSize+'px',
+  '--dodge-size':Math.max(38,Math.round(handSize*.79))+'px','--lamp-size':Math.max(38,Math.round(actionSize*.58))+'px',
+  '--mini-size':clamp(Math.round(h*.195),54,compact?74:88)+'px'
  };
  for(const [key,val] of Object.entries(props))root.style.setProperty(key,val);
 }
@@ -1666,17 +1687,17 @@ function directionalBuilt(){
  }
  return best;
 }
-function selectedPropAt(x,y){
+function selectedPropAt(x,y,props){
  const placed=structureAt(x,y);if(placed)return placed;
- return currentProps().find(q=>!q.decorative&&Math.floor(q.x)===x&&Math.floor(q.y)===y)||null;
+ return (props??currentProps()).find(q=>!q.decorative&&Math.floor(q.x)===x&&Math.floor(q.y)===y)||null;
 }
-function nearbyAction(){
+function repairTarget(){
  if(targetCell){
   const p=selectedPropAt(targetCell.x,targetCell.y);
   if(p&&distance(player.x,player.y,p.x,p.y)<2.9&&rayToSolidTarget(player.x,player.y,p.x,p.y))return{kind:'prop',p};
   const web=webAt(targetCell.x,targetCell.y);
   if(web&&distance(player.x,player.y,web.x+.5,web.y+.5)<2.6&&rayClear(player.x,player.y,web.x+.5,web.y+.5,false))return{kind:'web',web};
-  if(['pick','martillo'].includes(pickedItem()?.id)&&floorAt(targetCell.x,targetCell.y)&&distance(player.x,player.y,targetCell.x+.5,targetCell.y+.5)<2.9)return{kind:'floor',x:targetCell.x,y:targetCell.y};
+  if(floorAt(targetCell.x,targetCell.y)&&distance(player.x,player.y,targetCell.x+.5,targetCell.y+.5)<2.9)return{kind:'floor',x:targetCell.x,y:targetCell.y};
   return null; // No acción automática sobre otro objeto si uno está seleccionado.
  }
  if(selectedTile){
@@ -1685,8 +1706,43 @@ function nearbyAction(){
    return{kind:'wall',x:selectedTile.x,y:selectedTile.y,type};
   return null;
  }
- if(['pick','martillo'].includes(pickedItem()?.id)){const b=directionalBuilt();if(b)return b;}
+ const b=directionalBuilt();if(b)return b;
  const p=nearestProp();if(p)return{kind:'prop',p};return directionalWall();
+}
+function clearAimSelection(){handSelection=null;miningSelection=null;}
+function miningCandidateAt({x,y},props,preferFloor=false){
+ if(!inWorld(x,y))return null;
+ const floor=floorAt(x,y);
+ if(preferFloor&&floor&&tileAt(x,y)===T.FLOOR)return{kind:'floor',x,y,id:floor};
+ const web=webAt(x,y);
+ if(web)return{kind:'web',x,y,web,id:web};
+ const p=selectedPropAt(x,y,props);
+ if(p){
+  if(p.kind==='tree'||structureAt(x,y)===p)return{kind:'prop',x,y,p,id:p.kind==='tree'?p.id:p};
+  return null;
+ }
+ const type=tileAt(x,y);
+ if(type!==T.FLOOR)return{kind:'wall',x,y,type,id:type};
+ return floor?{kind:'floor',x,y,id:floor}:null;
+}
+function miningTargetInReach(a,tapped){
+ if(!a)return false;
+ const tree=a.p?.kind==='tree';
+ const reach=a.kind==='wall'?(tapped?2.2:1.95):a.kind==='web'?2.6:tapped?2.9:tree?1.65:2.15;
+ const x=a.p?.x??a.x+.5,y=a.p?.y??a.y+.5;
+ return distance(player.x,player.y,x,y)<reach&&targetPathClear(x,y);
+}
+function miningTarget(props){
+ if(miningSelection){
+  const {target,tool,level,preferFloor}=miningSelection;
+  if(layer===level&&pickedItem()===tool){
+   const a=miningCandidateAt(target,props,preferFloor);
+   if(a?.kind===target.kind&&a.id===target.id&&miningTargetInReach(a,true))return a;
+  }
+  miningSelection=null;
+ }
+ const a=miningCandidateAt(reticleCell(),props);
+ return miningTargetInReach(a,false)?a:null;
 }
 // La celda objetivo es maciza por definición. No debe bloquear su propio golpe
 // al apuntar en diagonal; sí bloquean todas las paredes que están antes.
@@ -1971,19 +2027,73 @@ function drawCreature(e,t){
  }
  if(e.id===selectedEnemy){ctx.strokeStyle='#f4cc81';ctx.lineWidth=2;ctx.strokeRect(Math.round(x-s*.47),Math.round(y-s*.56),Math.round(s*.94),Math.round(s*.80));}
 }
-// La MANO se ocupa exclusivamente de interactuar. No usa ni cambia el objeto equipado.
-function handTarget(){
- if(targetCell)return selectedPropAt(targetCell.x,targetCell.y);
- if(selectedTile)return null;
- return nearestProp(1.8);
+const releasePopup=$('release-popup');
+function canAim(){
+ return playing&&!paused&&releasePopup.classList.contains('hidden');
 }
-function doInteract(){
- if(!playing||paused)return;
- const p=handTarget();
- if(!p){toast('No hay nada con que interactuar. Selecciona una puerta, cofre o estación.',1950,'warning');return;}
- if(isWallStructure(p)){toast('Este muro no se utiliza: pícalo con el botón Acción.',1700,'warning');return;}
- if(distance(player.x,player.y,p.x,p.y)>2.35){toast('Acércate para interactuar.',1550,'warning');return;}
- if(!rayClear(player.x,player.y,p.x,p.y,false)){toast('Una pared bloquea la interacción.',1600,'warning');return;}
+function targetPathClear(bx,by){
+ const dx=bx-player.x,dy=by-player.y;
+ let x=Math.floor(player.x),y=Math.floor(player.y);
+ const tx=Math.floor(bx),ty=Math.floor(by),sx=Math.sign(dx),sy=Math.sign(dy);
+ // Comprueba cada celda que atraviesa el segmento, incluso cerca de una esquina.
+ while(x!==tx||y!==ty){
+  const nextX=x===tx?Infinity:(x+(sx>0?1:0)-player.x)/dx;
+  const nextY=y===ty?Infinity:(y+(sy>0?1:0)-player.y)/dy;
+  if(Math.abs(nextX-nextY)<1e-9&&(blocksTargetPath(x+sx,y)||blocksTargetPath(x,y+sy)))return false;
+  if(nextX<=nextY)x+=sx;
+  if(nextY<=nextX)y+=sy;
+  if((x!==tx||y!==ty)&&blocksTargetPath(x,y))return false;
+ }
+ // Los portones narrativos bloquean movimiento aunque el terreno sea transitable.
+ if(layer===1){
+  const steps=Math.ceil(Math.hypot(dx,dy)*12);
+  for(let i=1;i<steps;i++){
+   const px=player.x+dx*i/steps,py=player.y+dy*i/steps;
+   if(Math.floor(px)===tx&&Math.floor(py)===ty)break;
+   if(blockedByDungeonGate(px,py))return false;
+  }
+ }
+ return true;
+}
+function blocksTargetPath(x,y){return tileAt(x,y)!==T.FLOOR||isSolidStructure(structureAt(x,y));}
+function handTargetError(p){
+ if(!p||p.decorative)return 'Apunta o toca una puerta, cofre o estación.';
+ if(isWallStructure(p))return 'Este muro no se utiliza: pícalo con el botón Acción.';
+ if(distance(player.x,player.y,p.x,p.y)>HAND_REACH)return 'Acércate para interactuar.';
+ if(tileAt(p.x,p.y)!==T.FLOOR||!targetPathClear(p.x,p.y))return 'Una pared bloquea la interacción.';
+ if(p.kind==='dungeonboss'){
+  if(!dungeonSealsReady())return 'Necesitas activar los dos sellos de la galería antes de desafiar a la Viuda.';
+  if(quantity('sword')<1)return 'La Viuda es demasiado peligrosa sin una espada. Abre los cofres y prepárate.';
+ }
+ return '';
+}
+function reticleTarget(props){
+ const {x,y}=reticleCell();
+ if(distance(player.x,player.y,x+.5,y+.5)>HAND_REACH+Math.SQRT1_2)return null;
+ return selectedPropAt(x,y,props);
+}
+function tappedHandTarget(props){
+ if(!handSelection||handSelection.layer!==layer||handSelection.player!==player||handSelection.cell!==targetCell)return null;
+ const p=selectedPropAt(targetCell.x,targetCell.y,props);
+ return p?.id===handSelection.id&&p.kind===handSelection.kind&&(!handSelection.built||p===handSelection.built)?p:null;
+}
+// La retícula tiene prioridad. El clic secundario conserva su destino explícito.
+function doInteract(explicitTarget){
+ if(!canAim())return;
+ const aimed=explicitTarget===undefined?reticleTarget():explicitTarget;
+ const aimError=handTargetError(aimed);
+ if(!aimError){clearAimSelection();interactWithProp(aimed);return;}
+ if(explicitTarget===undefined){
+  const tapped=tappedHandTarget();
+  if(tapped){
+   const error=handSelection.error||handTargetError(tapped);
+   if(!error){miningSelection=null;interactWithProp(tapped);return;}
+   handSelection=null;toast(error,1550,'warning');return;
+  }
+ }
+ toast(aimError,1550,'warning');
+}
+function interactWithProp(p){
  if(p.kind==='supplycache'){
   if(story39.openedChests.includes(p.id)){toast('Este alijo ya fue registrado. No queda nada.',1700);return;}
   story39.openedChests.push(p.id);gain('cristal',1);gain('antorcha',2);
@@ -1996,10 +2106,10 @@ function doInteract(){
  if(p.kind==='dungeonrecord'){readForeman(p.note||'foreman');return;}
  if(p.kind==='dungeoncheckpoint'){activateDungeonCheckpoint();return;}
  if(p.kind==='dungeongate'){toast(dungeonSealsReady()?'El nido está abierto. Entra con cautela.':'El portón exige activar los dos sellos antiguos.',2600,dungeonSealsReady()?'important':'warning');return;}
- if(p.kind==='dungeonboss'){if(!dungeonSealsReady()){toast('Necesitas activar los dos sellos de la galería antes de desafiar a la Viuda.',3000,'warning');return;}if(quantity('sword')<1){toast('La Viuda es demasiado peligrosa sin una espada. Abre los cofres y prepárate.',2750,'warning');return;}openStory39('widow');return;}
+ if(p.kind==='dungeonboss'){openStory39('widow');return;}
  if(p.kind==='dungeonseal'){if(p.seal){activateDungeonSeal(p);return;}if(!story39.widowDefeated){toast('El sello solo cederá cuando caiga la Viuda de Carbón.',2600,'warning');return;}story39.gateOpen=true;queueSave();toast('El sello de seda se ha desvanecido.',2000);return;}
  if(p.kind==='tree'){collectWood(p);return;}
- if(p.layer!==undefined&&structures.has(p.id)){interactBuilt(p);return;}
+ if(p.kind==='anvil'||(p.layer!==undefined&&structures.has(p.id))){interactBuilt(p);return;}
  if(Number.isInteger(p.to)){changeLevel(p);return;}
  if(p.label)toast(p.label+(p.msg?' · '+p.msg:''),2300);
 }
@@ -2013,18 +2123,19 @@ function setActionVisual(iconMarkup,label,active,showContext,ctxIcon,ctxText){
  if(showContext){UI.context.classList.remove('hidden');if(UI.ctxIcon.textContent!==String(ctxIcon||''))UI.ctxIcon.textContent=ctxIcon||'';if(UI.ctxLabel.textContent!==String(ctxText||''))UI.ctxLabel.textContent=ctxText||'';}
  else UI.context.classList.add('hidden');
 }
-function updateContext(){
- const it=pickedItem(),item=ITEMS[it?.id],a=nearbyAction();
+function updateContext(pickTarget){
+ const it=pickedItem(),item=ITEMS[it?.id];
  if(item?.place){setActionVisual(itemArt(it.id,'action-art'),'PLANO',true,false);return;}
  if(it?.id==='sword'){const mob=selectedEnemy?enemies.get(selectedEnemy):null;setActionVisual(itemArt('sword','action-art'),'ATACAR',true,!!mob,'⚔',mob?`${MOB_NAMES[mob.kind]||'Criatura'} · ${Math.ceil(mob.hp)} PV`:null);return;}
  if(it?.id==='vendaje'||it?.id==='vendajefuerte'){setActionVisual(itemArt(it.id,'action-art'),'CURAR',true,false);return;}
  if(it?.id==='tonico'){setActionVisual(itemArt('tonico','action-art'),'VIGOR',true,false);return;}
  if(it?.id==='martillo'){
-  const repair=repairWear(a),material=repair?.material;
+  const repair=repairWear(repairTarget()),material=repair?.material;
   const label=repair?.damage>0?`Reparar · 1 ${ITEMS[material]?.name||'material'}`:repair?.material?'Sin daños':'Selecciona un bloque dañado';
   setActionVisual(itemArt('martillo','action-art'),'REPARAR',true,!!repair,'🔨',label);return;
  }
  if(it?.id==='pick'){
+  const a=pickTarget===undefined?miningTarget():pickTarget;
   if(a?.kind==='web'){setActionVisual(itemArt('pick','action-art'),'CORTAR',true,true,'≋','Telaraña · hilo recuperable');return;}
   if(a?.kind==='floor'){
    const id=floorAt(a.x,a.y),kind=id==='stonefloor'?'stonewall':'woodwall';
@@ -2035,7 +2146,7 @@ function updateContext(){
   }
   if(a?.kind==='wall'){
    const d=breakDamage.get(layer+':'+a.x+':'+a.y)||0;
-   if(HARD[a.type]>(player.pick||1)*4+1){setActionVisual(itemArt('pick','action-art'),'MEJORAR',true,true,'⚒',NAMES[a.type]+' · Pico insuficiente · RECETAS → FORJA');return;}
+   if(!wallCanBeMined(a.type)){setActionVisual(itemArt('pick','action-art'),'MEJORAR',true,true,'⚒',NAMES[a.type]+' · Pico insuficiente · RECETAS → FORJA');return;}
    setActionVisual(itemArt('pick','action-art'),'PICAR',true,true,'⚒',NAMES[a.type]+' · '+Math.max(0,HARD[a.type]-d)+' golpes restantes');return;
   }
   setActionVisual(itemArt('pick','action-art'),'PICAR',true,false);return;
@@ -2050,10 +2161,12 @@ function toast(str,ms=2200,kind='important'){
  UI.toast.classList.add('visible');
  toastUntil=performance.now()+Math.min(ms,3200);
 }
-function mineWall(a){if(!inWorld(a.x,a.y)){toast('Límite del estrato: no se puede excavar más.',2000,'warning');return;}let diff=HARD[a.type],power=Math.max(1,player.pick||1)+progression.skills.mining,pk=layer+':'+a.x+':'+a.y,old=breakDamage.get(pk)||0;
- const requiredTier=[T.GOLD,T.CRYSTAL,T.MITHRIL].includes(a.type)?2:[T.ADAMANTITE,T.ANCIENT].includes(a.type)?3:1;
- if((player.pick||1)<requiredTier||diff>power*4+1){if(!actionHeld)toast('Pico insuficiente. Mejora en RECETAS → FORJA.',2650,'warning');return;}
- if(!rayToSolidTarget(player.x,player.y,a.x+.5,a.y+.5))return;
+function wallCanBeMined(type){
+ const requiredTier=[T.GOLD,T.CRYSTAL,T.MITHRIL].includes(type)?2:[T.ADAMANTITE,T.ANCIENT].includes(type)?3:1;
+ return (player.pick||1)>=requiredTier&&HARD[type]<=(Math.max(1,player.pick||1)+progression.skills.mining)*4+1;
+}
+function mineWall(a){let diff=HARD[a.type],power=Math.max(1,player.pick||1)+progression.skills.mining,pk=layer+':'+a.x+':'+a.y,old=breakDamage.get(pk)||0;
+ if(!wallCanBeMined(a.type)){if(!actionHeld)toast('Pico insuficiente. Mejora en RECETAS → FORJA.',2650,'warning');return;}
  let next=old+power;hitFlash=.18;
  if(next<diff){breakDamage.set(pk,next);scheduleSave();return;}
  breakDamage.delete(pk);setTile(a.x,a.y,T.FLOOR);if(selectedTile&&selectedTile.x===a.x&&selectedTile.y===a.y)selectedTile=null;
@@ -2063,7 +2176,7 @@ function mineWall(a){if(!inWorld(a.x,a.y)){toast('Límite del estrato: no se pue
  else if(stats.mined===1||stats.mined%17===0)toast('+'+1+' '+ore+' · '+stats.mined+' bloques excavados',1200,'common');
  if(navigator.vibrate)try{navigator.vibrate(8);}catch{}scheduleSave();
 }
-function changeLevel(p){selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();clearBlueprint();if(!Number.isInteger(p.to)||p.to<0||p.to>=LAYERS)return;
+function changeLevel(p){clearAimSelection();selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();clearBlueprint();if(!Number.isInteger(p.to)||p.to<0||p.to>=LAYERS)return;
  layer=p.to;if(layer===1){seedDungeon();if(!worldLayoutVersion)learnLore('entrance');}invalidateLights();player.x=p.spawn.x;player.y=p.spawn.y;screen.camX=player.x;screen.camY=player.y;selectedTile=null;breakDamage.clear();vis=new Set();visitedLevels.add(layer);stats.transitions++;reveal();updateHud();queueSave();toast('✦ Nivel '+layer+' · '+LEVELS[layer].name,2700);checkDanger(layer);
 }
 function doAction(silent=false){
@@ -2079,9 +2192,10 @@ function doAction(silent=false){
   if(removeFrom(inventory,'tonico',1)){stamina=Math.min(MAX_STAMINA,stamina+55);refreshHotbar();refreshCombatUI();queueSave();}return;
  }
  if(it?.id==='sword'){swordAttack(false);return;}
- if(it?.id==='martillo'){if(!silent)repairWithHammer(nearbyAction());return;}
+ if(it?.id==='martillo'){if(!silent)repairWithHammer(repairTarget());return;}
  if(it?.id!=='pick'){if(!silent)toast('Selecciona una herramienta o un objeto para construir.',1400,'warning');return;}
- const a=nearbyAction();
+ if(!canAim())return;
+ const a=miningTarget();
  if(a?.kind==='web'){strikeWeb(a.web,'pick');return;}
  if(a?.kind==='floor'){mineBuiltFloor(a.x,a.y);return;}
  if(a?.kind==='prop'){
@@ -2106,7 +2220,7 @@ async function writeStored(data){if(db){try{await new Promise((resolve,reject)=>
  try{localStorage.setItem(SAVE_KEY,JSON.stringify(data));return true;}catch(e){console.warn('No save space',e);return false;}}
 let delayedSave=null;function scheduleSave(){clearTimeout(delayedSave);delayedSave=setTimeout(()=>queueSave(),1200);}
 function queueSave(silent=true){if(!playing)return Promise.resolve(false);const data=snapshot();saveChain=saveChain.then(()=>writeStored(data)).then(ok=>{if(!ok&&!silent)toast('No fue posible guardar: revisa el espacio del navegador.',2900,'warning');else if(!silent)toast('Expedición guardada en este dispositivo.');return ok;});return saveChain;}
-function restore(s){story39={...freshStory39(),...(s.story39&&typeof s.story39==='object'?s.story39:{prologueSeen:true})};story39.seals=Array.isArray(story39.seals)?story39.seals.filter(x=>DUNGEON_SEALS.includes(x)):[];if(story39.widowDefeated)story39.seals=[...DUNGEON_SEALS];story39.clues=Array.isArray(story39.clues)?story39.clues.filter(x=>STORY_FRAGMENTS[x]).slice(0,20):[];story39.openedChests=Array.isArray(story39.openedChests)?story39.openedChests.filter(x=>typeof x==='string').slice(0,30):[];story39.remainsSearched=Array.isArray(story39.remainsSearched)?[...new Set(story39.remainsSearched.filter(x=>typeof x==='string'))].slice(0,3000):[];remainsChunkCache.clear();pendingBattle39=s.boss39&&!story39.widowDefeated?s.boss39:null;bossBattle=null;stamina=clamp(Number.isFinite(s.stamina)?s.stamina:100,0,100);staminaDelay=0;dodgeTime=0;dodgeCooldown=0;swordCharging=false;attackFX=null;enemies=new Map();defeatedEnemies=new Set(Array.isArray(s.defeatedEnemies)?s.defeatedEnemies.filter(x=>typeof x==='string').slice(0,15000):[]);webs=new Map();selectedEnemy=null;
+function restore(s){clearAimSelection();story39={...freshStory39(),...(s.story39&&typeof s.story39==='object'?s.story39:{prologueSeen:true})};story39.seals=Array.isArray(story39.seals)?story39.seals.filter(x=>DUNGEON_SEALS.includes(x)):[];if(story39.widowDefeated)story39.seals=[...DUNGEON_SEALS];story39.clues=Array.isArray(story39.clues)?story39.clues.filter(x=>STORY_FRAGMENTS[x]).slice(0,20):[];story39.openedChests=Array.isArray(story39.openedChests)?story39.openedChests.filter(x=>typeof x==='string').slice(0,30):[];story39.remainsSearched=Array.isArray(story39.remainsSearched)?[...new Set(story39.remainsSearched.filter(x=>typeof x==='string'))].slice(0,3000):[];remainsChunkCache.clear();pendingBattle39=s.boss39&&!story39.widowDefeated?s.boss39:null;bossBattle=null;stamina=clamp(Number.isFinite(s.stamina)?s.stamina:100,0,100);staminaDelay=0;dodgeTime=0;dodgeCooldown=0;swordCharging=false;attackFX=null;enemies=new Map();defeatedEnemies=new Set(Array.isArray(s.defeatedEnemies)?s.defeatedEnemies.filter(x=>typeof x==='string').slice(0,15000):[]);webs=new Map();selectedEnemy=null;
  for(const e of Array.isArray(s.enemies)?s.enemies.slice(0,800):[]){if(e&&typeof e.id==='string'&&!!MOB_SPECS[e.kind]&&Number.isInteger(e.layer)&&e.layer>=0&&e.layer<LAYERS&&Number.isFinite(e.x)&&Number.isFinite(e.y)&&Number.isFinite(e.hp)&&e.hp>0&&inWorld(e.x,e.y))enemies.set(e.id,{id:e.id,kind:e.kind,layer:e.layer,x:e.x,y:e.y,hp:e.hp,maxHp:e.maxHp||MOB_SPECS[e.kind].hp,hit:0,attack:0,webClock:3,windup:0,stagger:0,dx:0,dy:1,elite:!!e.elite,poison:clamp(Number(e.poison)||0,0,3),poisonTick:clamp(Number(e.poisonTick)||1,.01,2)});}
  for(const entry of Array.isArray(s.webs)?s.webs.slice(0,2000):[]){const [k,w]=entry||[];if(typeof k==='string'&&w&&Number.isInteger(w.layer)&&w.layer>=0&&w.layer<LAYERS&&inWorld(w.x,w.y))webs.set(k,{x:w.x,y:w.y,layer:w.layer,hp:Math.max(1,Math.min(2,w.hp||2)),owner:String(w.owner||'')});}
  dismantleDamage.clear();breakDamage.clear();dismantleFX=null;resetMiningFocus();invalidateLights();blueprint.clear();blueprintHistory=[];ghostCells=[];seed=s.seed>>>0;worldLayoutVersion=s.worldLayoutVersion===1?1:0;layoutCache.clear();layer=s.layer;player={x:s.position.x,y:s.position.y,gender:s.gender==='female'?'female':'male',dirX:0,dirY:1,face:'down',walk:0,steps:+s.steps||0,pick:clamp(+s.pick||1,1,5),weaponTier:clamp(+s.weaponTier||0,0,3),armorTier:clamp(+s.armorTier||0,0,3)};
@@ -2150,11 +2264,11 @@ function restore(s){story39={...freshStory39(),...(s.story39&&typeof s.story39==
 function newGame(){progression=freshProgression();refreshProgressionHud();story39=freshStory39();remainsChunkCache.clear();bossBattle=null;pendingBattle39=null;stamina=MAX_STAMINA;staminaDelay=0;dodgeTime=0;dodgeCooldown=0;swordCharging=false;attackFX=null;enemies.clear();defeatedEnemies.clear();webs.clear();selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();invalidateLights();blueprint.clear();blueprintHistory=[];ghostCells=[];seed=(Math.random()*0x7fffffff)>>>0;worldLayoutVersion=1;layoutCache.clear();layer=0;chunkCache.clear();glowPropCache.clear();mined.clear();fog.clear();vis.clear();stats={mined:0,explored:0,visits:1,transitions:0};ores={piedra:0,tierra:0,cobre:0};visitedLevels=new Set([0]);breakDamage.clear();selectedTile=null;structures.clear();backs.clear();floorTiles.clear();placedBlocks.clear();harvested.clear();groundDrops=[];deathBags=[];mainBase=null;respawn={layer:0,x:.5,y:.5};hp=100;targetCell=null;equipment={head:null,chest:null,legs:null,feet:null,offhand:null};toolRunes={sword:null,pick:null};runeTarget='sword';starterGelGranted=true;startingInventory();refreshHotbar();
  player={x:START.x,y:START.y,gender:selCharacter,dirX:0,dirY:1,face:'down',walk:0,steps:0,pick:1,weaponTier:0,armorTier:0};screen.camX=player.x;screen.camY=player.y;startPlay();toast('⛏ Toca una pared y mantén PICAR.',2600);}
 function continueGame(s){restore(s);startPlay();toast('Has regresado a '+LEVELS[layer].name,1400,'common');}
-function startPlay(){refreshProgressionHud();if(layer===1)seedDungeon();refreshHotbar();refreshLampButton();playing=true;paused=false;refreshCombatUI();UI.menu.classList.add('hidden');UI.hud.classList.remove('hidden');UI.modal.classList.add('hidden');modalType='';reveal();updateHud();updateContext();updateBlueprintUI();queueSave();if(!story39.prologueSeen)openStory39('prologue');else if(pendingBattle39){const saved=pendingBattle39;pendingBattle39=null;startWidowBattle(saved);}try{canvas.focus({preventScroll:true})}catch{}}
+function startPlay(){clearAimSelection();refreshProgressionHud();if(layer===1)seedDungeon();refreshHotbar();refreshLampButton();playing=true;paused=false;refreshCombatUI();UI.menu.classList.add('hidden');UI.hud.classList.remove('hidden');UI.modal.classList.add('hidden');modalType='';reveal();updateHud();updateContext();updateBlueprintUI();queueSave();if(!story39.prologueSeen)openStory39('prologue');else if(pendingBattle39){const saved=pendingBattle39;pendingBattle39=null;startWidowBattle(saved);}try{canvas.focus({preventScroll:true})}catch{}}
 function setCharacter(ch){selCharacter=ch;document.querySelectorAll('[data-character]').forEach(el=>{let on=el.dataset.character===ch;el.classList.toggle('selected',on);el.setAttribute('aria-pressed',String(on));});}
 const escapeHTML=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let mapView={x:0,y:0,zoom:3.6};
-function showModal(type){if(!playing)return;const previousModalType=modalType;paused=true;resetJoy();actionHeld=false;cancelSwordCharge();dodgeTime=0;resetMiningFocus();UI.actionBtn.classList.remove('pressed');modalType=type;UI.modal.classList.remove('hidden');const title=$('modal-title'),body=$('modal-body');
+function showModal(type){if(!playing)return;clearAimSelection();const previousModalType=modalType;paused=true;resetJoy();actionHeld=false;cancelSwordCharge();dodgeTime=0;resetMiningFocus();UI.actionBtn.classList.remove('pressed');modalType=type;UI.modal.classList.remove('hidden');const title=$('modal-title'),body=$('modal-body');
  if(type==='pause'){
   title.textContent='Expedición en pausa';body.innerHTML=`<p class="panel-text"><b>${player.gender==='female'?'Enana minera':'Enano minero'}</b> · Nivel ${layer}: <b>${escapeHTML(LEVELS[layer].name)}</b>. Tus minas son un mundo procedural persistente; la partida de la 1.6 sigue independiente.</p><div class="panel-grid"><div class="info-tile"><strong>${stats.placed||0} construcciones</strong><span>Bloques, muebles y refugios</span></div><div class="info-tile"><strong>${stats.crafted||0} fabricados</strong><span>Objetos hechos en esta partida</span></div><div class="info-tile"><strong>${stats.mined} bloques</strong><span>Minerales y roca picados</span></div><div class="info-tile"><strong>${stats.kills||0} criaturas</strong><span>Enemigos derrotados</span></div><div class="info-tile"><strong>${stats.explored} casillas</strong><span>Mapa revelado</span></div><div class="info-tile"><strong>${visitedLevels.size} / 8 niveles</strong><span>Profundidades visitadas</span></div><div class="info-tile"><strong>Personaje nivel ${progression.level}</strong><span>${progression.points} puntos de habilidad · ${progression.xp} XP</span></div><div class="info-tile"><strong>Pico nivel ${player.pick}</strong><span>Dominio minero provisional</span></div></div><div class="panel-actions"><button class="primary" data-a="resume">▶ CONTINUAR</button><button data-a="save">▣ GUARDAR</button><button data-a="export">⇩ RESPALDO</button><button data-a="import">⇧ IMPORTAR</button><button data-a="craft">⚒ RECETAS</button><button data-a="journal">▤ DIARIO</button><button data-a="updates">✧ NOVEDADES</button><button data-a="skills">✧ HABILIDADES</button><button data-a="help">? GUÍA</button><button data-a="new">↻ NUEVO MUNDO</button></div>`;
  }else if(type==='updates'){
@@ -2260,7 +2374,7 @@ function drawMiniMap(){
   if(Math.hypot(x-center,y-center)<center-7){g.fillStyle='#e37879';g.fillRect(Math.round(x)-2,Math.round(y)-2,4,4);}
  }
  // Flecha que gira según la dirección de movimiento del personaje.
- const dx=player.dirX||0,dy=player.dirY||1,a=Math.atan2(dy,dx);
+ const a=player.dirX||player.dirY?Math.atan2(player.dirY,player.dirX):Math.PI/2;
  g.save();g.translate(center,center);g.rotate(a);g.fillStyle='#f8ebbf';g.beginPath();g.moveTo(7,0);g.lineTo(-5,-4);g.lineTo(-2,0);g.lineTo(-5,4);g.closePath();g.fill();g.restore();
 }
 function drawMap(){const c=$('exploration-map');if(!c)return;const g=c.getContext('2d');g.imageSmoothingEnabled=false;g.fillStyle='#090e16';g.fillRect(0,0,c.width,c.height);
@@ -2775,23 +2889,61 @@ function drawCombatEffects(t){
  if(dodgeTime>0){const a=worldToScreen(player.x,player.y);ctx.save();ctx.globalAlpha=.25;
   ctx.fillStyle='#70d5d5';ctx.beginPath();ctx.ellipse(a.x-dodgeX*t*.46,a.y-dodgeY*t*.46,t*.34,t*.49,0,0,Math.PI*2);ctx.fill();ctx.restore();}
 }
-function render(t){const w=screen.w,h=screen.h,d=screen.dpr;ctx.setTransform(d,0,0,d,0,0);ctx.imageSmoothingEnabled=false;ctx.fillStyle='#101824';ctx.fillRect(0,0,w,h);
+function drawMiningTarget(t,a){
+ if(!a)return;
+ if(a.kind==='wall'&&!wallCanBeMined(a.type))return;
+ if(a.p?.kind==='chest'&&a.p.storage?.some(Boolean))return;
+ const key=a.kind==='floor'?floorDismantleKey(a.x,a.y):a.p&&structures.has(a.p.id)?dismantleKey(a.p):null;
+ if(key&&actionHeld&&actionFocus&&actionFocus!==key)return;
+ const cell=worldToScreen(a.x,a.y);
+ ctx.save();ctx.strokeStyle='#dda263';ctx.globalAlpha=.8;ctx.lineWidth=1;
+ ctx.strokeRect(Math.floor(cell.x)+2.5,Math.floor(cell.y)+2.5,t-5,t-5);
+ ctx.restore();
+}
+function drawHandReticle(t,props){
+ if(!canAim())return;
+ const p=reticleTarget(props),active=!handTargetError(p);
+ ctx.save();
+ ctx.globalAlpha=.75;
+ ctx.fillStyle=active?'#a5e5aa':'#eef1ef';
+ const {x,y}=reticlePoint();
+ const size=clamp(Math.round(t*.19),5,7);
+ ctx.fillRect(x-1,y-size,2,size*2);
+ ctx.fillRect(x-size,y-1,size-1,2);
+ ctx.fillRect(x+1,y-1,size-1,2);
+ if(active){
+  const cell=worldToScreen(Math.floor(p.x),Math.floor(p.y));
+  ctx.strokeStyle='#a5e5aa';ctx.globalAlpha=.48;ctx.lineWidth=1;
+  ctx.strokeRect(Math.floor(cell.x)+1.5,Math.floor(cell.y)+1.5,t-3,t-3);
+ }
+ ctx.restore();
+}
+function render(t){const w=screen.w,h=screen.h;ctx.setTransform(canvas.width/w,0,0,canvas.height/h,0,0);ctx.imageSmoothingEnabled=false;ctx.fillStyle='#101824';ctx.fillRect(0,0,w,h);
  const x0=Math.floor(screen.camX-w/(2*t))-1,x1=Math.ceil(screen.camX+w/(2*t))+1,y0=Math.floor(screen.camY-h/(2*t))-1,y1=Math.ceil(screen.camY+h/(2*t))+1,entities=[];
  for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
  const a=worldToScreen(x,y),kind=tileAt(x,y);if(kind===T.FLOOR){drawGround(x,y,Math.floor(a.x),Math.floor(a.y),t);drawBackgroundWall(x,y,Math.floor(a.x),Math.floor(a.y),t);drawBuiltFloor(x,y,Math.floor(a.x),Math.floor(a.y),t);}
  else{ctx.fillStyle='#192430';ctx.fillRect(Math.floor(a.x),Math.floor(a.y),t+1,t+1);entities.push({kind:'wall',y:y+.92,x,yy:y,a,type:kind});}}
  for(const web of webs.values())if(web.layer===layer&&web.x>=x0-1&&web.x<=x1+1&&web.y>=y0-1&&web.y<=y1+1&&vis.has(web.x+','+web.y))drawWeb(web,t);
- for(const mob of localEnemies())if(mob.x>=x0-1&&mob.x<=x1+1&&mob.y>=y0-1&&mob.y<=y1+1)entities.push({kind:'mob',y:mob.y,p:mob});
- for(const p of currentProps())if(p.kind!=='platform'&&p.x>=x0-2&&p.x<=x1+2&&p.y>=y0-2&&p.y<=y1+2)entities.push({kind:'prop',y:isWallStructure(p)?p.y+.42:p.y,p});
+ const mobs=localEnemies();
+ for(const mob of mobs)if(mob.x>=x0-1&&mob.x<=x1+1&&mob.y>=y0-1&&mob.y<=y1+1)entities.push({kind:'mob',y:mob.y,p:mob});
+ const props=currentProps();
+ if(handSelection&&!handSelection.error&&handTargetError(tappedHandTarget(props)))handSelection=null;
+ const pickEquipped=pickedItem()?.id==='pick';
+ const pickTarget=pickEquipped&&canAim()?miningTarget(props):null;
+ if(pickEquipped&&canAim())updateContext(pickTarget);
+ for(const p of props)if(p.kind!=='platform'&&p.x>=x0-2&&p.x<=x1+2&&p.y>=y0-2&&p.y<=y1+2)entities.push({kind:'prop',y:isWallStructure(p)?p.y+.42:p.y,p});
  for(const d of groundDrops)if(d.layer===layer&&d.x>x0-1&&d.x<x1+1&&d.y>y0-1&&d.y<y1+1)entities.push({kind:'drop',y:d.y,p:d});
  for(const d of deathBags)if(d.layer===layer&&d.x>x0-1&&d.x<x1+1&&d.y>y0-1&&d.y<y1+1)entities.push({kind:'deathbag',y:d.y,p:d});
  entities.push({kind:'player',y:player.y});entities.sort((a,b)=>a.y-b.y);
  for(const e of entities){if(e.kind==='wall')drawWall(e.x,e.yy,Math.floor(e.a.x),Math.floor(e.a.y),t,e.type);else if(e.kind==='prop')drawProp(e.p,t);else if(e.kind==='mob')drawCreature(e.p,t);else if(e.kind==='drop')drawGroundDrop(e.p,t);else if(e.kind==='deathbag')drawDeathBag(e.p,t);else drawPlayer(t);}
  drawDemolitionEffects(t);drawPickSwing(t);drawCombatEffects(t);
  // Uncommitted construction blueprints: ghost drawings, never real walls until accepted.
- for(const c of [...blueprint.values(),...ghostCells]){
+ const preview=ghostCells.length?new Map(blueprint):blueprint;
+ for(const c of ghostCells)preview.set(plannedKey(c.id,c.x,c.y,c.layer),c);
+ const previewCells=[...preview.values()].sort((a,b)=>Number(isFloorItem(b.id))-Number(isFloorItem(a.id)));
+ for(const c of previewCells){
   if(c.layer!==layer||c.x<x0-1||c.x>x1+1||c.y<y0-1||c.y>y1+1)continue;
-  const a=worldToScreen(c.x,c.y),kind=buildKind(c.id),valid=validateBlueprintCell(c);
+  const a=worldToScreen(c.x,c.y),kind=buildKind(c.id),valid=!validateBlueprintCell(c,preview,props,mobs);
   ctx.save();ctx.globalAlpha=.62;renderBlueprintPreview=true;
   if(kind==='woodback'||kind==='stoneback'||kind==='door'){
    drawProp({x:c.x+.5,y:c.y+.5,kind:kind==='woodback'?'woodwall':kind==='stoneback'?'stonewall':'door',open:false},t);
@@ -2805,12 +2957,13 @@ function render(t){const w=screen.w,h=screen.h,d=screen.dpr;ctx.setTransform(d,0
   if(!valid){ctx.fillStyle='rgba(216,48,51,.25)';ctx.fillRect(a.x+2,a.y+2,t-4,t-4);}
  }
  // El contorno solo indica la selección; tocar jamás ejecuta una interacción.
- if(targetCell){const a=worldToScreen(targetCell.x,targetCell.y);ctx.strokeStyle='#edc783';ctx.lineWidth=2.5;
+ if(!pickEquipped&&targetCell){const a=worldToScreen(targetCell.x,targetCell.y);ctx.strokeStyle='#edc783';ctx.lineWidth=2.5;
   ctx.strokeRect(Math.round(a.x)+3,Math.round(a.y)+3,t-6,t-6);
   ctx.fillStyle='rgba(237,199,131,.12)';ctx.fillRect(Math.round(a.x)+4,Math.round(a.y)+4,t-8,t-8);}
  // Nearby mining highlight, damage cracks and transparent fog of war.
- if(selectedTile&&tileAt(selectedTile.x,selectedTile.y)!==T.FLOOR){let a=worldToScreen(selectedTile.x,selectedTile.y);ctx.lineWidth=2;ctx.strokeStyle='#f1c687';ctx.strokeRect(a.x+2,a.y+2,t-4,t-4);}
- const a=nearbyAction();if(a?.kind==='wall'){let v=breakDamage.get(layer+':'+a.x+':'+a.y)||0;if(v>0){let b=worldToScreen(a.x,a.y);ctx.strokeStyle='rgba(19,15,21,.8)';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(b.x+t*.25,b.y+t*.3);ctx.lineTo(b.x+t*.55,b.y+t*.55);ctx.lineTo(b.x+t*.46,b.y+t*.84);ctx.stroke();}}
+ if(!pickEquipped&&selectedTile&&tileAt(selectedTile.x,selectedTile.y)!==T.FLOOR){let a=worldToScreen(selectedTile.x,selectedTile.y);ctx.lineWidth=2;ctx.strokeStyle='#f1c687';ctx.strokeRect(a.x+2,a.y+2,t-4,t-4);}
+ const a=pickEquipped?pickTarget:pickedItem()?.id==='martillo'?repairTarget():null;
+ if(a?.kind==='wall'){let v=breakDamage.get(layer+':'+a.x+':'+a.y)||0;if(v>0){let b=worldToScreen(a.x,a.y);ctx.strokeStyle='rgba(19,15,21,.8)';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(b.x+t*.25,b.y+t*.3);ctx.lineTo(b.x+t*.55,b.y+t*.55);ctx.lineTo(b.x+t*.46,b.y+t*.84);ctx.stroke();}}
  for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
   const a=worldToScreen(x,y),v=vis.has(x+','+y);
   if(!fogAt(x,y)){
@@ -2842,6 +2995,8 @@ function render(t){const w=screen.w,h=screen.h,d=screen.dpr;ctx.setTransform(d,0
  }
  // Player's lamp is a subtle warm glow; never changes the silhouette approved in Alpha 1.
  if(lampActive()){const p=worldToScreen(player.x,player.y),rr=t*2.2,grad=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,rr);grad.addColorStop(0,'rgba(237,180,112,.10)');grad.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=grad;ctx.fillRect(p.x-rr,p.y-rr,rr*2,rr*2);}
+ drawMiningTarget(t,pickTarget);
+ drawHandReticle(t,props);
 }
 function update(dt){if(!playing||paused)return;
  dodgeCooldown=Math.max(0,dodgeCooldown-dt);
@@ -2868,9 +3023,13 @@ function update(dt){if(!playing||paused)return;
  }else player.walk=0;
  updateCreatures(dt);
  hitFlash=Math.max(0,hitFlash-dt);impactSwing=Math.max(0,impactSwing-dt);if(dismantleFX){dismantleFX.ttl-=dt;if(dismantleFX.ttl<=0)dismantleFX=null;}blink+=dt;frameCount++;
+ // La repetición utiliza la cámara del último cuadro visible y vuelve a validar el alcance.
  if(actionHeld&&pickedItem()?.id!=='sword'){actionCD-=dt;if(actionCD<=0){doAction(true);actionCD=.19+Math.max(0,.13-player.pick*.025);}}
- const f=1-Math.exp(-9*dt);screen.camX+=(clamp(player.x,-MAX+20,MAX-20)-screen.camX)*f;screen.camY+=(clamp(player.y,-MAX+12,MAX-12)-screen.camY)*f;
- if(frameCount%7===0){reveal();collectDrops();updateContext();updateHud();}
+ const f=1-Math.exp(-9*dt);
+ const ahead=CAMERA_LOOK_AHEAD/(Math.hypot(player.dirX,player.dirY)||1);
+ screen.camX+=(clamp(player.x+player.dirX*ahead,-MAX+20,MAX-20)-screen.camX)*f;
+ screen.camY+=(clamp(player.y+player.dirY*ahead,-MAX+12,MAX-12)-screen.camY)*f;
+ if(frameCount%7===0){reveal();collectDrops();if(pickedItem()?.id!=='pick')updateContext();if(blueprint.size)updateBlueprintUI();updateHud();}
  if(layer>=5&&tileAt(player.x,player.y)===T.FLOOR&&hashInt(Math.floor(player.x),Math.floor(player.y),12)>.985){hazardClock+=dt;if(hazardClock>=.7){hp-=Math.max(2,6-Math.floor(totalArmor()/3));hazardClock=0;if(hp<=0)die();}}else hazardClock=0;
  autoSaveTime+=dt;if(autoSaveTime>9){autoSaveTime=0;queueSave();}
 }
@@ -2934,31 +3093,45 @@ function mobileTap(el,handler){
 mobileTap(UI.dodgeBtn,()=>dodge());
 mobileTap(UI.interactBtn,()=>doInteract());
 mobileTap(UI.lampBtn,()=>{if(equippedLamp())toggleLamp(false);});
-canvas.addEventListener('contextmenu',e=>{e.preventDefault();if(playing&&!paused){const cell=pointerWorldCell(e);const pr=selectedPropAt(cell.x,cell.y);if(pr){targetCell={x:cell.x,y:cell.y};selectedTile=null;}updateContext();doInteract();}});
-function pointerWorldCell(e){const rect=canvas.getBoundingClientRect(),p=screenToWorld(e.clientX-rect.left,e.clientY-rect.top);return{x:Math.floor(p.x),y:Math.floor(p.y)};}
+canvas.addEventListener('contextmenu',e=>{e.preventDefault();if(canAim()){const cell=pointerWorldCell(e);const pr=selectedPropAt(cell.x,cell.y);if(pr){targetCell=cell;selectedTile=null;}updateContext();doInteract(pr);}});
+function pointerWorldPoint(e){
+ const rect=canvas.getBoundingClientRect();
+ return screenToWorld((e.clientX-rect.left)*screen.w/rect.width,(e.clientY-rect.top)*screen.h/rect.height);
+}
+function pointerWorldCell(e){const p=pointerWorldPoint(e);return{x:Math.floor(p.x),y:Math.floor(p.y)};}
 canvas.addEventListener('pointerdown',e=>{
- if(!playing||paused)return;
- const {x,y}=pointerWorldCell(e);if(!inWorld(x,y))return;
+ if(!canAim()||e.button!==0||drawing)return;
+ const point=pointerWorldPoint(e),x=Math.floor(point.x),y=Math.floor(point.y);
+ clearAimSelection();
+ if(isBuildItem()){
+  e.preventDefault();drawing={id:e.pointerId,start:{x,y},end:{x,y}};
+  ghostCells=blueprintCells(drawing.start,drawing.end,pickedItem()?.id);
+  try{canvas.setPointerCapture(e.pointerId);}catch{}
+  targetCell=null;selectedTile=null;updateBlueprintUI();return;
+ }
+ if(!inWorld(x,y))return;
  const creature=chooseCreatureAt(x,y);
  if(creature){selectedEnemy=creature.id;targetCell=null;selectedTile=null;updateContext();return;}
  selectedEnemy=null;
+ const tool=pickedItem();
+ if(tool?.id==='pick'){
+  // El borde de una casilla revestida selecciona el piso; el centro conserva la prioridad del objeto.
+  const preferFloor=!!structureAt(x,y)&&Math.max(Math.abs(point.x-x-.5),Math.abs(point.y-y-.5))>=.25;
+  const target=miningCandidateAt({x,y},undefined,preferFloor);
+  if(miningTargetInReach(target,true))miningSelection={target,tool,level:layer,preferFloor:preferFloor&&target.kind==='floor'};
+ }
  const web=webAt(x,y);
  if(web){targetCell={x,y};selectedTile=null;updateContext();return;}
  const pr=selectedPropAt(x,y);
  if(pr){
   targetCell={x:Math.floor(pr.x),y:Math.floor(pr.y)};selectedTile=null;
+  handSelection={cell:targetCell,id:pr.id,kind:pr.kind,built:structureAt(x,y),layer,player,error:handTargetError(pr)};
   // Solo seleccionar, incluso con el pico o una construcción equipada.
   updateContext();return;
  }
  if(tileAt(x,y)!==T.FLOOR){targetCell=null;selectedTile={x,y};updateContext();return;}
  if(floorAt(x,y)){
   targetCell={x,y};selectedTile=null;updateContext();return;
- }
- if(isBuildItem()){
-  e.preventDefault();drawing={id:e.pointerId,start:{x,y},end:{x,y}};
-  ghostCells=blueprintCells(drawing.start,drawing.end,pickedItem()?.id).slice(0,BLUEPRINT_MAX);
-  try{canvas.setPointerCapture(e.pointerId);}catch{}
-  targetCell=null;selectedTile=null;updateBlueprintUI();return;
  }
  targetCell=null;selectedTile=null;updateContext();
 });
@@ -2968,11 +3141,12 @@ canvas.addEventListener('pointermove',e=>{
  ghostCells=blueprintCells(drawing.start,drawing.end,pickedItem()?.id).slice(0,BLUEPRINT_MAX);
 });
 function finishBlueprintPointer(e,commit){if(!drawing||drawing.id!==e.pointerId)return;
- if(commit){const {start,end}=drawing;addBlueprint(start,end);}else{ghostCells=[];}
+ if(commit&&canAim()){const {start,end}=drawing;addBlueprint(start,end);}else{ghostCells=[];}
  drawing=null;updateBlueprintUI();
 }
 canvas.addEventListener('pointerup',e=>finishBlueprintPointer(e,true));
 canvas.addEventListener('pointercancel',e=>finishBlueprintPointer(e,false));
+canvas.addEventListener('lostpointercapture',e=>finishBlueprintPointer(e,false));
 blueUI.root.querySelectorAll('[data-plan-mode]').forEach(btn=>btn.addEventListener('click',()=>{
  blueprintMode=btn.dataset.planMode;updateBlueprintUI();
 }));
@@ -2984,11 +3158,11 @@ window.addEventListener('keydown',e=>{if(['Space','ArrowDown','ArrowUp','ArrowLe
 window.addEventListener('keyup',e=>{keys.delete(e.code);if(e.code==='KeyE'||e.code==='Space'){if(swordCharging)endSwordCharge();actionHeld=false;resetMiningFocus();}});
 window.addEventListener('blur',()=>{keys.clear();resetJoy();actionTouchId=null;actionPointerId=null;actionHeld=false;cancelSwordCharge();resetMiningFocus();if(playing&&!paused){queueSave();showModal('pause');}});
 $('pick-male').addEventListener('click',()=>setCharacter('male'));$('pick-female').addEventListener('click',()=>setCharacter('female'));
-$('btn-play').addEventListener('click',async()=>{if(await readStored()){if(!confirm('¿Generar nuevo mundo Alpha 3.9.4.2? Reemplaza la expedición actual. Se recomienda hacer un respaldo antes. La Alpha 1 y la v1.6 no cambiarán.'))return;}newGame();});
+$('btn-play').addEventListener('click',async()=>{if(await readStored()){if(!confirm('¿Generar nuevo mundo Alpha '+RELEASE_VERSION+'? Reemplaza la expedición actual. Se recomienda hacer un respaldo antes. La Alpha 1 y la v1.6 no cambiarán.'))return;}newGame();});
 $('btn-resume').addEventListener('click',async()=>{const s=await readStored();if(s)continueGame(s);else newGame();});
 UI.hudToggle.addEventListener('click',()=>{
- hudExpanded=!hudExpanded;
- UI.hud.classList.toggle('hud-expanded',hudExpanded);
+ const hudExpanded=!UI.hudToggle.matches('[aria-expanded="true"]');
+ $('hud-details').classList.toggle('hidden',!hudExpanded);
  UI.hudToggle.setAttribute('aria-expanded',String(hudExpanded));
  UI.hudToggle.setAttribute('aria-label',hudExpanded?'Reducir información':'Mostrar más información');
  UI.hudToggle.textContent=hudExpanded?'⌃':'⌄';
