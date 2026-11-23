@@ -24,8 +24,12 @@ const UI={hudToggle:$('hud-toggle'),menu:$('menu'),hud:$('hud'),modal:$('modal')
 // Las novedades se almacenan fuera de la partida para no alterar su formato ni el progreso.
 // Para cada futuro deploy: actualizar RELEASE_VERSION, añadir la entrada nueva al inicio
 // de RELEASE_HISTORY, y cambiar los archivos cacheados en sw.js.
-const RELEASE_VERSION='3.9.4.5', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
+const RELEASE_VERSION='3.9.4.6', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
 const RELEASE_HISTORY=[
+ {version:'3.9.4.6',name:'Construcción sobre suelo y pisos',date:'23/11/2026',changes:[
+  'Traza planos sobre suelo transitable y pisos construidos. Puedes combinar un piso y una estructura en la misma casilla.',
+  'Con el pico, toca el borde de una casilla revestida para retirar el piso sin desmontar la estructura.'
+ ]},
  {version:'3.9.4.5',name:'Corrección de apuntado y minería',date:'20/11/2026',changes:[
   'El pico usa la selección por toque mientras siga accesible o la casilla bajo la retícula.',
   'Un contorno de cobre muestra la casilla que recibirá el siguiente golpe.'
@@ -708,7 +712,7 @@ function nearbyWood(){if(layer!==0&&layer!==1)return[];const cx=Math.floor(playe
 function collectWood(p){const k=builtKey(layer,p.x,p.y);if(harvested.has(k))return;harvested.add(k);gain('madera',4);stats.harvested=(stats.harvested||0)+1;toast('Madera recogida (+4)',1200,'common');refreshHotbar();queueSave();}
 function pickedItem(){return inventory[slot];}
 function isBuildItem(){return !!ITEMS[pickedItem()?.id]?.place;}
-function chooseSlot(i){slot=clamp(i|0,0,7);resetMiningFocus();clearAimSelection();targetCell=null;selectedTile=null;ghostCells=[];refreshHotbar();updateContext();updateBlueprintUI();}
+function chooseSlot(i){slot=clamp(i|0,0,7);resetMiningFocus();clearAimSelection();targetCell=null;selectedTile=null;drawing=null;ghostCells=[];refreshHotbar();updateContext();updateBlueprintUI();}
 let hotbarInitialized=false;
 function refreshHotbar(){const root=$('hotbar');if(!root)return;
  const active=pickedItem();root.dataset.selectedName=active?weaponDisplayName(active.id):'Vacío';
@@ -737,9 +741,9 @@ function refreshHotbar(){const root=$('hotbar');if(!root)return;
 function isFloorItem(id){return id==='plataforma'||id==='suelopiedra';}
 function buildKind(id){return ITEMS[id]?.place||null;}
 function plannedKey(id,x,y,l=layer){return (isFloorItem(id)?'f:':'s:')+builtKey(l,x,y);}
-function placeTarget(){if(targetCell)return targetCell;
- const dx=player.dirX,dy=player.dirY,n=Math.hypot(dx,dy)||1;
- return{x:Math.floor(player.x+dx/n*1.55),y:Math.floor(player.y+dy/n*1.55)};}
+function placeTarget(){return reticleCell();}
+function builtStructureKind(kind){return kind==='woodback'?'woodwall':kind==='stoneback'?'stonewall':kind;}
+function isTerrainBlock(kind){return kind==='stone'||kind==='dirt';}
 function strokeCells(x0,y0,x1,y1,mode,id){
  const out=[],limit=16;
  x1=clamp(x1,x0-limit,x0+limit);y1=clamp(y1,y0-limit,y0+limit);
@@ -762,34 +766,33 @@ function blueprintCells(a,b,id,mode=blueprintMode){
  const allowed=isMulti?mode:'single';
  return strokeCells(a.x,a.y,b.x,b.y,allowed,id).map(q=>({...q,id,layer}));
 }
-function validateBlueprintCell(c){
+function validateBlueprintCell(c,plan,props,mobs){
  const {x,y,id}=c,k=builtKey(c.layer,x,y),kind=buildKind(id),old=structures.get(k);
- if(c.layer!==layer||!kind||!inWorld(x,y)||tileAt(x,y,c.layer)!==T.FLOOR)return false;
- if(distance(player.x,player.y,x+.5,y+.5)>BUILD_RADIUS)return false;
+ if(c.layer!==layer||!kind||!inWorld(x,y))return 'casilla fuera del estrato';
+ if(tileAt(x,y,c.layer)!==T.FLOOR||placedBlocks.has(k))return 'excava la casilla primero';
+ if(distance(player.x,player.y,x+.5,y+.5)>BUILD_RADIUS)return 'fuera de alcance';
+ if(props.some(p=>p.kind!=='tree'&&structureAt(p.x,p.y)!==p&&distance(p.x,p.y,x+.5,y+.5)<.68))return 'objeto o acceso protegido';
  if(isFloorItem(id)){
-  // Floors are walkable surfaces, but cannot replace or hide a structure.
-  // Block overlaps with both existing structures and walls/doors queued in the same plan.
-  if(old||placedBlocks.has(k)||blueprint.has('s:'+k)||ghostCells.some(g=>g.layer===c.layer&&g.x===x&&g.y===y&&!isFloorItem(g.id)))return false;
-  if(currentProps().some(p=>p.kind!=='tree'&&distance(p.x,p.y,x+.5,y+.5)<.68&&!structures.has(p.id)))return false;
-  return floorAt(x,y,c.layer)!==kind;
+  if(isTerrainBlock(buildKind(plan.get('s:'+k)?.id)))return 'un bloque macizo no admite piso';
+  return floorAt(x,y,c.layer)===kind?'ya existe ese piso':'';
  }
- // Do not allow a new wall or furniture on top of a planned floor in the same blueprint.
- if(blueprint.has('f:'+k)||ghostCells.some(g=>g.layer===c.layer&&g.x===x&&g.y===y&&isFloorItem(g.id)))return false;
- if(distance(player.x,player.y,x+.5,y+.5)<.8)return false;
- if(old){if(old.kind===kind)return false;
-  if(!(isWallStructure(old)||old.kind==='door')||!['woodback','stoneback','door'].includes(kind))return false;
- }
- if(kind==='stone'||kind==='dirt'){
-  if(placedBlocks.has(k))return false;
- }
- if(currentProps().some(p=>p.layer===undefined||p.layer===layer ? distance(p.x,p.y,x+.5,y+.5)<.68 && p.kind!=='tree' && !structures.has(p.id):false))return false;
- return true;
+ const terrain=isTerrainBlock(kind),nextKind=builtStructureKind(kind);
+ if(terrain&&(floorAt(x,y,c.layer)||plan.has('f:'+k)))return 'retira el piso antes de colocar un bloque macizo';
+ if(old&&(old.kind===nextKind||!(isWallStructure(old)||old.kind==='door')||!isSolidStructure({kind:nextKind})))return 'casilla ocupada por otra estructura';
+ if((terrain||isSolidStructure({kind:nextKind}))&&hitSolidCell(x,y,.255,player.x,player.y))return 'bloquearía al personaje';
+ if(mobs.some(p=>hitSolidCell(x,y,.255,p.x,p.y)))return 'casilla ocupada por un enemigo';
+ if(blockedByDungeonGate(x+.5,y+.5))return 'acceso protegido';
+ return '';
 }
 function draftSummary(entries=[...blueprint.values()]){
- const need={};let invalid=0;
- for(const c of entries){need[c.id]=(need[c.id]||0)+1;if(!validateBlueprintCell(c))invalid++;}
+ const need={},reasons=new Set(),props=propsFor(layer),mobs=localEnemies();let invalid=0;
+ for(const c of entries){
+  need[c.id]=(need[c.id]||0)+1;
+  const reason=validateBlueprintCell(c,blueprint,props,mobs);
+  if(reason){invalid++;reasons.add(reason);}
+ }
  const missing=Object.entries(need).filter(([id,n])=>quantity(id)<n).map(([id,n])=>`${ITEMS[id].name} ${quantity(id)}/${n}`);
- return{need,invalid,missing,total:entries.length};
+ return{need,invalid,reasons:[...reasons],missing,total:entries.length};
 }
 function updateBlueprintUI(){
  if(!blueUI.root)return;
@@ -799,31 +802,37 @@ function updateBlueprintUI(){
  if(UI.toast.textContent.includes('Toca una pared')){UI.toast.classList.remove('visible');toastUntil=0;}
  blueUI.root.querySelectorAll('[data-plan-mode]').forEach(b=>{b.classList.toggle('selected',b.dataset.planMode===blueprintMode);b.disabled=!item||!['paredpiedra','paredmadera','plataforma','suelopiedra'].includes(item.id);});
  const data=draftSummary(),lines=Object.entries(data.need).map(([id,n])=>`${ITEMS[id].name} ×${n}`);
- blueUI.status.textContent=data.total?`${data.total} piezas · ${lines.join(', ')}${data.invalid?' · '+data.invalid+' sin sitio':''}${data.missing.length?' · faltan '+data.missing.join(', '):''}`:'Toca o arrastra sobre el mapa para dibujar';
+ const status=data.total?[data.reasons.join(', '),data.missing.length?'Faltan '+data.missing.join(', '):'',data.total+' piezas · '+lines.join(', ')].filter(Boolean).join(' · '):'Toca o arrastra sobre el mapa para dibujar';
+ if(blueUI.status.textContent!==status)blueUI.status.textContent=blueUI.status.title=status;
  blueUI.confirm.disabled=!data.total||!!data.invalid||!!data.missing.length;
  blueUI.confirm.textContent=data.total?`✓ CONSTRUIR (${data.total})`:'✓ CONSTRUIR';
  blueUI.cancel.disabled=!data.total;
  const undo=$('blueprint-undo');if(undo)undo.disabled=!blueprintHistory.length;
+ return data;
 }
 function addBlueprint(a,b=a){
  const id=pickedItem()?.id;
  if(!buildKind(id))return;
  const cells=blueprintCells(a,b,id);
- if(blueprint.size+cells.length>BLUEPRINT_MAX){toast('Plano muy grande. Máximo '+BLUEPRINT_MAX+' piezas.',1800,'warning');return;}
+ const added=cells.filter(c=>!blueprint.has(plannedKey(c.id,c.x,c.y,c.layer))).length;
+ if(blueprint.size+added>BLUEPRINT_MAX){ghostCells=[];toast('Plano muy grande. Máximo '+BLUEPRINT_MAX+' piezas.',1800,'warning');return;}
  if(cells.length){blueprintHistory.push(new Map(blueprint));if(blueprintHistory.length>20)blueprintHistory.shift();}
  for(const c of cells){
   const k=plannedKey(c.id,c.x,c.y,c.layer),other=blueprint.get(k);
   if(other&&other.id===c.id)continue;
   blueprint.set(k,c);
  }
- ghostCells=[];targetCell=null;updateBlueprintUI();scheduleSave();
+ ghostCells=[];targetCell=null;
+ const result=updateBlueprintUI();
+ if(result?.invalid)toast('Plano inválido · '+result.reasons.join(' · '),2500,'warning');
+ scheduleSave();
 }
 function undoBlueprint(){if(!blueprintHistory.length)return;blueprint=blueprintHistory.pop();ghostCells=[];updateBlueprintUI();scheduleSave();}
 function clearBlueprint(){blueprint.clear();blueprintHistory=[];ghostCells=[];drawing=null;targetCell=null;updateBlueprintUI();scheduleSave();}
 function confirmBlueprint(){
  const entries=[...blueprint.values()],result=draftSummary(entries);
  if(!result.total)return;
- if(result.invalid){toast('Corrige las casillas marcadas en rojo o cancela el plano.',2200,'warning');return;}
+ if(result.invalid){toast('Plano inválido · '+result.reasons.join(' · '),2500,'warning');return;}
  if(result.missing.length){toast('Faltan materiales: '+result.missing.join(', '),2500,'warning');return;}
  const bag=inventory.map(it=>it?{...it}:null);
  for(const [id,n]of Object.entries(result.need))if(!removeFrom(bag,id,n))return;
@@ -832,7 +841,7 @@ function confirmBlueprint(){
   const {x,y,id}=c,k=builtKey(c.layer,x,y),kind=buildKind(id);
   if(isFloorItem(id)){
    const prev=floorTiles.get(k);
-   if(prev)refunds.push({id:prev==='platform'?'plataforma':'suelopiedra',x,y});
+   if(prev){refunds.push({id:prev==='platform'?'plataforma':'suelopiedra',x,y});dismantleDamage.delete(floorDismantleKey(x,y));}
    floorTiles.set(k,kind);continue;
   }
   const old=structures.get(k);
@@ -840,10 +849,10 @@ function confirmBlueprint(){
    refunds.push({id:old.kind==='woodwall'?'paredmadera':old.kind==='stonewall'?'paredpiedra':'puerta',x,y});
    structures.delete(k);dismantleDamage.delete('s:'+k);
   }
-  if(kind==='stone'||kind==='dirt'){
+  if(isTerrainBlock(kind)){
    setTile(x,y,kind==='stone'?T.ROCK:T.SOFT);placedBlocks.set(k,id);
   }else{
-   const structKind=kind==='woodback'?'woodwall':kind==='stoneback'?'stonewall':kind;
+   const structKind=builtStructureKind(kind);
    const p={x:x+.5,y:y+.5,layer,kind:structKind,id:k,open:false,storage:kind==='chest'?Array(16).fill(null):undefined};
    structures.set(k,p);
    if(kind==='banner')mainBase=k;
@@ -856,8 +865,8 @@ function confirmBlueprint(){
  toast('Fortaleza: '+entries.length+' piezas construidas.',1900);
 }
 function tryBuild(){
- const q=placeTarget();if(!buildKind(pickedItem()?.id))return false;
- addBlueprint(q);return true;
+ if(drawing||!buildKind(pickedItem()?.id))return false;
+ addBlueprint(placeTarget());return true;
 }
 function floorAt(x,y,l=layer){return floorTiles.get(builtKey(l,x,y));}
 function liftFloor(x,y){const k=builtKey(layer,x,y),floor=floorTiles.get(k);if(!floor)return false;
@@ -1701,8 +1710,10 @@ function repairTarget(){
  const p=nearestProp();if(p)return{kind:'prop',p};return directionalWall();
 }
 function clearAimSelection(){handSelection=null;miningSelection=null;}
-function miningCandidateAt({x,y},props){
+function miningCandidateAt({x,y},props,preferFloor=false){
  if(!inWorld(x,y))return null;
+ const floor=floorAt(x,y);
+ if(preferFloor&&floor&&tileAt(x,y)===T.FLOOR)return{kind:'floor',x,y,id:floor};
  const web=webAt(x,y);
  if(web)return{kind:'web',x,y,web,id:web};
  const p=selectedPropAt(x,y,props);
@@ -1712,7 +1723,6 @@ function miningCandidateAt({x,y},props){
  }
  const type=tileAt(x,y);
  if(type!==T.FLOOR)return{kind:'wall',x,y,type,id:type};
- const floor=floorAt(x,y);
  return floor?{kind:'floor',x,y,id:floor}:null;
 }
 function miningTargetInReach(a,tapped){
@@ -1724,9 +1734,9 @@ function miningTargetInReach(a,tapped){
 }
 function miningTarget(props){
  if(miningSelection){
-  const {target,tool,level}=miningSelection;
+  const {target,tool,level,preferFloor}=miningSelection;
   if(layer===level&&pickedItem()===tool){
-   const a=miningCandidateAt(target,props);
+   const a=miningCandidateAt(target,props,preferFloor);
    if(a?.kind===target.kind&&a.id===target.id&&miningTargetInReach(a,true))return a;
   }
   miningSelection=null;
@@ -2914,7 +2924,8 @@ function render(t){const w=screen.w,h=screen.h;ctx.setTransform(canvas.width/w,0
  const a=worldToScreen(x,y),kind=tileAt(x,y);if(kind===T.FLOOR){drawGround(x,y,Math.floor(a.x),Math.floor(a.y),t);drawBackgroundWall(x,y,Math.floor(a.x),Math.floor(a.y),t);drawBuiltFloor(x,y,Math.floor(a.x),Math.floor(a.y),t);}
  else{ctx.fillStyle='#192430';ctx.fillRect(Math.floor(a.x),Math.floor(a.y),t+1,t+1);entities.push({kind:'wall',y:y+.92,x,yy:y,a,type:kind});}}
  for(const web of webs.values())if(web.layer===layer&&web.x>=x0-1&&web.x<=x1+1&&web.y>=y0-1&&web.y<=y1+1&&vis.has(web.x+','+web.y))drawWeb(web,t);
- for(const mob of localEnemies())if(mob.x>=x0-1&&mob.x<=x1+1&&mob.y>=y0-1&&mob.y<=y1+1)entities.push({kind:'mob',y:mob.y,p:mob});
+ const mobs=localEnemies();
+ for(const mob of mobs)if(mob.x>=x0-1&&mob.x<=x1+1&&mob.y>=y0-1&&mob.y<=y1+1)entities.push({kind:'mob',y:mob.y,p:mob});
  const props=currentProps();
  if(handSelection&&!handSelection.error&&handTargetError(tappedHandTarget(props)))handSelection=null;
  const pickEquipped=pickedItem()?.id==='pick';
@@ -2927,9 +2938,12 @@ function render(t){const w=screen.w,h=screen.h;ctx.setTransform(canvas.width/w,0
  for(const e of entities){if(e.kind==='wall')drawWall(e.x,e.yy,Math.floor(e.a.x),Math.floor(e.a.y),t,e.type);else if(e.kind==='prop')drawProp(e.p,t);else if(e.kind==='mob')drawCreature(e.p,t);else if(e.kind==='drop')drawGroundDrop(e.p,t);else if(e.kind==='deathbag')drawDeathBag(e.p,t);else drawPlayer(t);}
  drawDemolitionEffects(t);drawPickSwing(t);drawCombatEffects(t);
  // Uncommitted construction blueprints: ghost drawings, never real walls until accepted.
- for(const c of [...blueprint.values(),...ghostCells]){
+ const preview=ghostCells.length?new Map(blueprint):blueprint;
+ for(const c of ghostCells)preview.set(plannedKey(c.id,c.x,c.y,c.layer),c);
+ const previewCells=[...preview.values()].sort((a,b)=>Number(isFloorItem(b.id))-Number(isFloorItem(a.id)));
+ for(const c of previewCells){
   if(c.layer!==layer||c.x<x0-1||c.x>x1+1||c.y<y0-1||c.y>y1+1)continue;
-  const a=worldToScreen(c.x,c.y),kind=buildKind(c.id),valid=validateBlueprintCell(c);
+  const a=worldToScreen(c.x,c.y),kind=buildKind(c.id),valid=!validateBlueprintCell(c,preview,props,mobs);
   ctx.save();ctx.globalAlpha=.62;renderBlueprintPreview=true;
   if(kind==='woodback'||kind==='stoneback'||kind==='door'){
    drawProp({x:c.x+.5,y:c.y+.5,kind:kind==='woodback'?'woodwall':kind==='stoneback'?'stonewall':'door',open:false},t);
@@ -3015,7 +3029,7 @@ function update(dt){if(!playing||paused)return;
  const ahead=CAMERA_LOOK_AHEAD/(Math.hypot(player.dirX,player.dirY)||1);
  screen.camX+=(clamp(player.x+player.dirX*ahead,-MAX+20,MAX-20)-screen.camX)*f;
  screen.camY+=(clamp(player.y+player.dirY*ahead,-MAX+12,MAX-12)-screen.camY)*f;
- if(frameCount%7===0){reveal();collectDrops();if(pickedItem()?.id!=='pick')updateContext();updateHud();}
+ if(frameCount%7===0){reveal();collectDrops();if(pickedItem()?.id!=='pick')updateContext();if(blueprint.size)updateBlueprintUI();updateHud();}
  if(layer>=5&&tileAt(player.x,player.y)===T.FLOOR&&hashInt(Math.floor(player.x),Math.floor(player.y),12)>.985){hazardClock+=dt;if(hazardClock>=.7){hp-=Math.max(2,6-Math.floor(totalArmor()/3));hazardClock=0;if(hp<=0)die();}}else hazardClock=0;
  autoSaveTime+=dt;if(autoSaveTime>9){autoSaveTime=0;queueSave();}
 }
@@ -3080,21 +3094,31 @@ mobileTap(UI.dodgeBtn,()=>dodge());
 mobileTap(UI.interactBtn,()=>doInteract());
 mobileTap(UI.lampBtn,()=>{if(equippedLamp())toggleLamp(false);});
 canvas.addEventListener('contextmenu',e=>{e.preventDefault();if(canAim()){const cell=pointerWorldCell(e);const pr=selectedPropAt(cell.x,cell.y);if(pr){targetCell=cell;selectedTile=null;}updateContext();doInteract(pr);}});
-function pointerWorldCell(e){
+function pointerWorldPoint(e){
  const rect=canvas.getBoundingClientRect();
- return screenCell((e.clientX-rect.left)*screen.w/rect.width,(e.clientY-rect.top)*screen.h/rect.height);
+ return screenToWorld((e.clientX-rect.left)*screen.w/rect.width,(e.clientY-rect.top)*screen.h/rect.height);
 }
+function pointerWorldCell(e){const p=pointerWorldPoint(e);return{x:Math.floor(p.x),y:Math.floor(p.y)};}
 canvas.addEventListener('pointerdown',e=>{
- if(!canAim()||e.button!==0)return;
- const {x,y}=pointerWorldCell(e);if(!inWorld(x,y))return;
+ if(!canAim()||e.button!==0||drawing)return;
+ const point=pointerWorldPoint(e),x=Math.floor(point.x),y=Math.floor(point.y);
  clearAimSelection();
+ if(isBuildItem()){
+  e.preventDefault();drawing={id:e.pointerId,start:{x,y},end:{x,y}};
+  ghostCells=blueprintCells(drawing.start,drawing.end,pickedItem()?.id);
+  try{canvas.setPointerCapture(e.pointerId);}catch{}
+  targetCell=null;selectedTile=null;updateBlueprintUI();return;
+ }
+ if(!inWorld(x,y))return;
  const creature=chooseCreatureAt(x,y);
  if(creature){selectedEnemy=creature.id;targetCell=null;selectedTile=null;updateContext();return;}
  selectedEnemy=null;
  const tool=pickedItem();
  if(tool?.id==='pick'){
-  const target=miningCandidateAt({x,y});
-  if(miningTargetInReach(target,true))miningSelection={target,tool,level:layer};
+  // El borde de una casilla revestida selecciona el piso; el centro conserva la prioridad del objeto.
+  const preferFloor=!!structureAt(x,y)&&Math.max(Math.abs(point.x-x-.5),Math.abs(point.y-y-.5))>=.25;
+  const target=miningCandidateAt({x,y},undefined,preferFloor);
+  if(miningTargetInReach(target,true))miningSelection={target,tool,level:layer,preferFloor:preferFloor&&target.kind==='floor'};
  }
  const web=webAt(x,y);
  if(web){targetCell={x,y};selectedTile=null;updateContext();return;}
@@ -3109,12 +3133,6 @@ canvas.addEventListener('pointerdown',e=>{
  if(floorAt(x,y)){
   targetCell={x,y};selectedTile=null;updateContext();return;
  }
- if(isBuildItem()){
-  e.preventDefault();drawing={id:e.pointerId,start:{x,y},end:{x,y}};
-  ghostCells=blueprintCells(drawing.start,drawing.end,pickedItem()?.id).slice(0,BLUEPRINT_MAX);
-  try{canvas.setPointerCapture(e.pointerId);}catch{}
-  targetCell=null;selectedTile=null;updateBlueprintUI();return;
- }
  targetCell=null;selectedTile=null;updateContext();
 });
 canvas.addEventListener('pointermove',e=>{
@@ -3123,11 +3141,12 @@ canvas.addEventListener('pointermove',e=>{
  ghostCells=blueprintCells(drawing.start,drawing.end,pickedItem()?.id).slice(0,BLUEPRINT_MAX);
 });
 function finishBlueprintPointer(e,commit){if(!drawing||drawing.id!==e.pointerId)return;
- if(commit){const {start,end}=drawing;addBlueprint(start,end);}else{ghostCells=[];}
+ if(commit&&canAim()){const {start,end}=drawing;addBlueprint(start,end);}else{ghostCells=[];}
  drawing=null;updateBlueprintUI();
 }
 canvas.addEventListener('pointerup',e=>finishBlueprintPointer(e,true));
 canvas.addEventListener('pointercancel',e=>finishBlueprintPointer(e,false));
+canvas.addEventListener('lostpointercapture',e=>finishBlueprintPointer(e,false));
 blueUI.root.querySelectorAll('[data-plan-mode]').forEach(btn=>btn.addEventListener('click',()=>{
  blueprintMode=btn.dataset.planMode;updateBlueprintUI();
 }));
