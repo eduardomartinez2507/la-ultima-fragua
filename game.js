@@ -216,6 +216,93 @@ const SITE_SHAPES={
 const SITE_TRACES=['wagon','rail','bones','rubble','cocoon','coal'];
 const siteLayoutCache=new WeakMap();
 let activePlaySeconds=0,siteProgress=new Map(),openSite=null;
+const ruinsQA=location.protocol==='https:'&&/^desarrollo\.[a-z0-9-]+\.pages\.dev$/.test(location.hostname)
+ &&new URLSearchParams(location.search).get('qa')==='ruinas';
+let qaLayer=1,qaSiteId='',qaBackupPlayer=null,qaBackupConfirmed=false,qaMessage='';
+function qaSites(){return explorationSites(qaLayer);}
+function qaSelectedSite(){
+ const sites=qaSites();
+ return sites.find(site=>site.id===qaSiteId)||sites[0];
+}
+function qaPanel(){
+ const site=qaSelectedSite(),state=siteProgress.get(site?.id);
+ const unlocked=qaBackupPlayer===player&&qaBackupConfirmed;
+ const remaining=state?.refillAt==null?null:Math.max(0,Math.ceil(state.refillAt-activePlaySeconds));
+ const contents=state?.items===null||!state?'Sin generar':state.items.map(it=>ITEMS[it.id].name+' ×'+it.n+(it.unique?' (único)':'')).join(', ')||'Vacío';
+ const danger={safe:'Seguro',occupied:'Ocupado',ambush:'Emboscada'};
+ return `<p class="panel-text">Usa una partida de prueba. Los cambios de QA pueden guardarse automáticamente.</p>
+ <div class="panel-actions"><button type="button" data-qa-act="backup">EXPORTAR RESPALDO</button></div>
+ <p class="panel-text"><label><input type="checkbox" id="qa-backup-confirm" ${qaBackupPlayer!==player?'disabled':''} ${unlocked?'checked':''}> Confirmo que guardé el respaldo de esta partida</label></p>
+ <p class="panel-text"><label>Estrato <select id="qa-layer">${Array.from({length:6},(_,i)=>`<option value="${i+1}" ${qaLayer===i+1?'selected':''}>${i+1}</option>`).join('')}</select></label></p>
+ <p class="panel-text"><label>Lugar <select id="qa-site" ${site?'':'disabled'}>${qaSites().map(p=>`<option value="${p.id}" ${site.id===p.id?'selected':''}>${p.siteType==='tower'?'Ruina':'Campamento'}</option>`).join('')}</select></label></p>
+ ${site?`<dl class="panel-text"><dt>Identificador</dt><dd>${site.id}</dd><dt>Peligro</dt><dd>${danger[site.danger]}</dd>
+ <dt>Descubierto</dt><dd>${state?'Sí':'No'}</dd><dt>Emboscada activada</dt><dd>${state?.ambushed?'Sí':'No'}</dd>
+ <dt>Contenedor</dt><dd>${contents}</dd><dt>Reabastecimiento</dt><dd>${remaining===null?'Sin cuenta atrás':Math.floor(remaining/60)+' min '+remaining%60+' s'}</dd></dl>`:
+ '<p class="panel-text">Esta partida usa la geografía anterior y no tiene estos lugares. Prueba con una partida que use la geografía procedural.</p>'}
+ <p class="panel-text" role="status">${qaMessage}</p>
+ <div class="panel-actions">
+ <button type="button" data-qa-act="ambush" ${site?'':'disabled'}>BUSCAR EMBOSCADA</button>
+ <button type="button" data-qa-act="travel" ${unlocked&&site?'':'disabled'}>TRASLADAR</button>
+ <button type="button" data-qa-act="refill" ${unlocked&&remaining>0&&!state.items.length?'':'disabled'}>SIMULAR TIEMPO RESTANTE</button>
+ <button type="button" data-a="resume">VOLVER</button></div>`;
+}
+function qaLanding(site){
+ if(!canMove(site.x,site.y,site.level)||structureAt(site.x,site.y,site.level))return null;
+ const props=propsFor(site.level);
+ const offsets=[[0,1],[1,0],[0,-1],[-1,0],[0,2],[2,0],[0,-2],[-2,0],[1,1],[-1,1],[1,-1],[-1,-1]];
+ for(const [dx,dy] of offsets){
+  const x=site.x+dx,y=site.y+dy;
+  if(!inWorld(x,y)||!canMove(x,y,site.level)||!canMove(site.x+dx/2,site.y+dy/2,site.level))continue;
+  if(site.level>=5&&hashInt(Math.floor(x),Math.floor(y),12)>.985)continue;
+  if(structureAt(x,y,site.level)||props.some(p=>distance(x,y,p.x,p.y)<.7)||webAt(x,y,site.level))continue;
+  if([...enemies.values()].some(e=>e.layer===site.level&&e.hp>0&&distance(x,y,e.x,e.y)<2))continue;
+  return{x,y};
+ }
+ return null;
+}
+function handleQA(action){
+ if(!ruinsQA||modalType!=='qa')return;
+ qaMessage='';
+ if(action==='backup'){
+  exportGame();qaBackupPlayer=player;qaBackupConfirmed=false;
+  qaMessage='Comprueba que el archivo se haya guardado y marca la confirmación.';
+ }else if(action==='ambush'){
+  const levels=Array.from({length:6},(_,i)=>(qaLayer-1+i)%6+1);
+  const sites=levels.flatMap(explorationSites).filter(p=>p.danger==='ambush');
+  const found=sites.find(p=>!siteProgress.get(p.id)?.ambushed)||sites[0];
+  if(found){qaLayer=found.level;qaSiteId=found.id;}
+  qaMessage=found?'Emboscada seleccionada. El traslado requiere un respaldo confirmado.':'Esta semilla no tiene lugares con emboscada.';
+ }else if(qaBackupPlayer===player&&qaBackupConfirmed){
+  const site=qaSelectedSite();
+  if(!site)return;
+  if(action==='travel'){
+   if(drawing||blueprint.size){qaMessage='Termina o cancela el plano antes de trasladarte.';}
+   else{
+    const spawn=qaLanding(site);
+    if(spawn){
+     closeModal();
+     player.dirX=site.x-spawn.x;player.dirY=site.y-spawn.y;
+     changeLevel({to:site.level,spawn});return;
+    }
+    qaMessage='No se encontró una casilla cercana libre de obstáculos y enemigos.';
+   }
+  }else if(action==='refill'){
+   const state=siteProgress.get(site.id);
+   if(state?.items?.length===0&&state.refillAt>activePlaySeconds){
+    // Solo adelanta el vencimiento de este contenedor; el reloj compartido queda intacto.
+    state.refillAt=activePlaySeconds;queueSave();
+    qaMessage='Tiempo simulado. Vuelve a abrir el contenedor con Mano para comprobar el reabastecimiento.';
+   }
+  }
+ }
+ showModal('qa');
+}
+function hookQA(body){
+ body.querySelector('#qa-layer').addEventListener('change',e=>{qaLayer=Number(e.target.value);qaSiteId='';qaMessage='';showModal('qa');});
+ body.querySelector('#qa-site').addEventListener('change',e=>{qaSiteId=e.target.value;qaMessage='';showModal('qa');});
+ body.querySelector('#qa-backup-confirm').addEventListener('change',e=>{qaBackupConfirmed=e.target.checked&&qaBackupPlayer===player;showModal('qa');});
+ body.querySelectorAll('[data-qa-act]').forEach(b=>b.addEventListener('click',()=>handleQA(b.dataset.qaAct)));
+}
 function explorationSites(l){
  if(!worldLayoutVersion||l<1||l>6)return [];
  const layout=worldLayout(l);
@@ -1782,18 +1869,18 @@ function currentProps(includeScenery=false){
  return props.concat(includeScenery?scenery:scenery.filter(p=>p.siteClue));
 }
 function solid(x,y){return tileAt(x,y)!==T.FLOOR;}
-function blockedByDungeonGate(x,y){
- if(layer!==1)return false;
+function blockedByDungeonGate(x,y,l=layer){
+ if(l!==1)return false;
  const q=dungeonLocal(x,y);
  return (!dungeonSealsReady()&&q.x>136.8&&q.x<138.2&&q.y>1.5&&q.y<5.6)
   ||(!story39.gateOpen&&q.x>169.8&&q.x<171.2&&q.y>1.4&&q.y<5.6);
 }
-function canMove(x,y){const r=.255;
- if(blockedByDungeonGate(x,y))return false;
+function canMove(x,y,l=layer){const r=.255;
+ if(blockedByDungeonGate(x,y,l))return false;
  const x0=Math.floor(x-r),x1=Math.floor(x+r),y0=Math.floor(y-r),y1=Math.floor(y+r);
  for(let cy=y0;cy<=y1;cy++)for(let cx=x0;cx<=x1;cx++){
   if(!hitSolidCell(cx,cy,r,x,y))continue;
-  if(tileAt(cx,cy)!==T.FLOOR||isSolidStructure(structureAt(cx,cy)))return false;
+  if(tileAt(cx,cy,l)!==T.FLOOR||isSolidStructure(structureAt(cx,cy,l)))return false;
  }return true;
 }
 function worldToScreen(x,y){return{x:(x-screen.camX)*screen.tile+screen.w/2,y:(y-screen.camY)*screen.tile+screen.h/2};}
@@ -2441,9 +2528,12 @@ function startPlay(){clearAimSelection();refreshProgressionHud();if(layer===1)se
 function setCharacter(ch){selCharacter=ch;document.querySelectorAll('[data-character]').forEach(el=>{let on=el.dataset.character===ch;el.classList.toggle('selected',on);el.setAttribute('aria-pressed',String(on));});}
 const escapeHTML=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let mapView={x:0,y:0,zoom:3.6};
-function showModal(type){if(!playing)return;clearAimSelection();const previousModalType=modalType;paused=true;resetJoy();actionHeld=false;cancelSwordCharge();dodgeTime=0;resetMiningFocus();UI.actionBtn.classList.remove('pressed');modalType=type;UI.modal.classList.remove('hidden');const title=$('modal-title'),body=$('modal-body');
+function showModal(type){if(!playing||(type==='qa'&&!ruinsQA))return;clearAimSelection();const previousModalType=modalType;paused=true;resetJoy();actionHeld=false;cancelSwordCharge();dodgeTime=0;resetMiningFocus();UI.actionBtn.classList.remove('pressed');modalType=type;UI.modal.classList.remove('hidden');const title=$('modal-title'),body=$('modal-body');
  if(type==='pause'){
   title.textContent='Expedición en pausa';body.innerHTML=`<p class="panel-text"><b>${player.gender==='female'?'Enana minera':'Enano minero'}</b> · Nivel ${layer}: <b>${escapeHTML(LEVELS[layer].name)}</b>. Tus minas son un mundo procedural persistente; la partida de la 1.6 sigue independiente.</p><div class="panel-grid"><div class="info-tile"><strong>${stats.placed||0} construcciones</strong><span>Bloques, muebles y refugios</span></div><div class="info-tile"><strong>${stats.crafted||0} fabricados</strong><span>Objetos hechos en esta partida</span></div><div class="info-tile"><strong>${stats.mined} bloques</strong><span>Minerales y roca picados</span></div><div class="info-tile"><strong>${stats.kills||0} criaturas</strong><span>Enemigos derrotados</span></div><div class="info-tile"><strong>${stats.explored} casillas</strong><span>Mapa revelado</span></div><div class="info-tile"><strong>${visitedLevels.size} / 8 niveles</strong><span>Profundidades visitadas</span></div><div class="info-tile"><strong>Personaje nivel ${progression.level}</strong><span>${progression.points} puntos de habilidad · ${progression.xp} XP</span></div><div class="info-tile"><strong>Pico nivel ${player.pick}</strong><span>Dominio minero provisional</span></div></div><div class="panel-actions"><button class="primary" data-a="resume">▶ CONTINUAR</button><button data-a="save">▣ GUARDAR</button><button data-a="export">⇩ RESPALDO</button><button data-a="import">⇧ IMPORTAR</button><button data-a="craft">⚒ RECETAS</button><button data-a="journal">▤ DIARIO</button><button data-a="updates">✧ NOVEDADES</button><button data-a="skills">✧ HABILIDADES</button><button data-a="help">? GUÍA</button><button data-a="new">↻ NUEVO MUNDO</button></div>`;
+  if(ruinsQA)body.querySelector('.panel-actions').insertAdjacentHTML('afterbegin','<button type="button" data-a="qa">QA · RUINAS</button>');
+ }else if(type==='qa'){
+  title.textContent='QA · Ruinas y campamentos';body.innerHTML=qaPanel();hookQA(body);
  }else if(type==='updates'){
   title.textContent='Novedades · Historial';body.innerHTML=releaseHistoryMarkup();
  }else if(type==='map'){
@@ -2517,7 +2607,7 @@ function showModal(type){if(!playing)return;clearAimSelection();const previousMo
 
  }
  body.querySelectorAll('[data-a]').forEach(btn=>btn.addEventListener('click',()=>{const a=btn.dataset.a;
-  if(a==='resume')closeModal();else if(a==='save')queueSave(false);else if(a==='help')showModal('help');else if(a==='journal')showModal('journal');else if(a==='updates')showModal('updates');else if(a==='skills')showModal('skills');else if(a==='equip')showModal('equip');else if(a==='pause')showModal('pause');else if(a==='craft')showModal('craft');else if(a==='export')exportGame();else if(a==='import')$('import-file').click();else if(a==='new'){
+  if(a==='qa')showModal('qa');else if(a==='resume')closeModal();else if(a==='save')queueSave(false);else if(a==='help')showModal('help');else if(a==='journal')showModal('journal');else if(a==='updates')showModal('updates');else if(a==='skills')showModal('skills');else if(a==='equip')showModal('equip');else if(a==='pause')showModal('pause');else if(a==='craft')showModal('craft');else if(a==='export')exportGame();else if(a==='import')$('import-file').click();else if(a==='new'){
    if(confirm('¿Volver al menú y crear un mundo nuevo? Antes puedes exportar el guardado. La partida 1.6 y Alpha 1 NO se modificarán.')){closeModal();playing=false;paused=true;UI.hud.classList.add('hidden');UI.menu.classList.remove('hidden');$('btn-resume').classList.remove('hidden');}}
  }));
 }
