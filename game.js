@@ -24,8 +24,12 @@ const UI={hudToggle:$('hud-toggle'),menu:$('menu'),hud:$('hud'),modal:$('modal')
 // Las novedades se almacenan fuera de la partida para no alterar su formato ni el progreso.
 // Para cada futuro deploy: actualizar RELEASE_VERSION, añadir la entrada nueva al inicio
 // de RELEASE_HISTORY, y cambiar los archivos cacheados en sw.js.
-const RELEASE_VERSION='3.9.4.6', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
+const RELEASE_VERSION='3.9.4.7', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
 const RELEASE_HISTORY=[
+ {version:'3.9.4.7',name:'Ruinas y campamentos explorables',date:'25/11/2026',changes:[
+  'Investiga las ruinas y campamentos, recoge suministros con Mano y descubre las pistas de expediciones anteriores.',
+  'Algunos lugares tienen criaturas o emboscadas. Los suministros comunes regresan tras 90 minutos de exploración activa.'
+ ]},
  {version:'3.9.4.6',name:'Construcción sobre suelo y pisos',date:'23/11/2026',changes:[
   'Traza planos sobre suelo transitable y pisos construidos. Puedes combinar un piso y una estructura en la misma casilla.',
   'Con el pico, toca el borde de una casilla revestida para retirar el piso sin desmontar la estructura.'
@@ -204,6 +208,163 @@ const DEPTH_XP=[1,1.15,1.35,1.6,2,2.4,2.9,3.5];
 function depthStats(l){return{health:DEPTH_HP[clamp(l,0,7)],damage:DEPTH_DAMAGE[clamp(l,0,7)],xp:DEPTH_XP[clamp(l,0,7)]};}
 function seededPoint(l,k,min,max){const angle=hashInt(l*19,k,705+k)*Math.PI*2,r=min+(max-min)*hashInt(l*29,k,719+k);return{x:Math.round(Math.cos(angle)*r)+.5,y:Math.round(Math.sin(angle)*r)+.5};}
 function offsetPoint(a,b){return{x:a.x+b.x-.5,y:a.y+b.y-.5};}
+const SITE_REFILL=90*60;
+const SITE_SHAPES={
+ tower:[[-1,-1,'ruin'],[1,-1,'ruin'],[-2,0,'rubble'],[2,1,'rubble']],
+ camp:[[-1,1,'site_embers'],[1,0,'crate'],[-2,-1,'site_trace'],[1,-1,'bones']]
+};
+const SITE_TRACES=['wagon','rail','bones','rubble','cocoon','coal'];
+const siteLayoutCache=new WeakMap();
+let activePlaySeconds=0,siteProgress=new Map(),openSite=null;
+function explorationSites(l){
+ if(!worldLayoutVersion||l<1||l>6)return [];
+ const layout=worldLayout(l);
+ if(siteLayoutCache.has(layout))return siteLayoutCache.get(layout);
+ const sites=layout.ruins.map((point,i)=>{
+  const siteType=i?'camp':'tower',roll=hashInt(l,i,1207);
+  const hint=l===1&&!i?{x:layout.dungeon.x+.5,y:layout.dungeon.y+.5}:i?layout.down:layout.shaftDown;
+  const compass=directionHint(point,hint);
+  return {...point,id:`site:${seed}:${l}:${siteType}`,kind:'ruin',siteType,level:l,
+   danger:roll<.30?'safe':roll<.75?'occupied':'ambush',
+   label:i?'Campamento minero abandonado':'Restos de una antigua torre',
+   msg:i?'El mapa de los mineros marca un descenso hacia el '+compass+'.':
+    l===1?'Las huellas de la expedición conducen hacia el '+compass+'.':'Las marcas de pico señalan un pozo antiguo hacia el '+compass+'.'};
+ });
+ siteLayoutCache.set(layout,sites);return sites;
+}
+function advanceExplorationClock(seconds){
+ if(playing&&!paused&&!document.hidden&&seconds>0&&seconds<=.25)activePlaySeconds+=seconds;
+}
+function discoverSite(site){
+ if(!siteProgress.has(site.id)){
+  siteProgress.set(site.id,{searched:false,occupied:false,ambushed:false,uniqueClaimed:false,cycle:0,items:null,refillAt:null});
+  scheduleSave();
+ }
+ return siteProgress.get(site.id);
+}
+function visitExplorationSites(){
+ if(!playing||paused||document.hidden)return;
+ for(const site of explorationSites(layer)){
+  if(distance(player.x,player.y,site.x,site.y)>9||!vis.has(Math.floor(site.x)+','+Math.floor(site.y)))continue;
+  const state=discoverSite(site);
+  if(site.danger==='occupied'&&!state.occupied&&spawnSiteCreatures(site)){
+   state.occupied=true;scheduleSave();
+  }
+ }
+}
+function spawnSiteCreatures(site){
+ if(enemies.size>=650)return 0;
+ // Busca casillas conectadas al jugador, usando su misma colisión.
+ const px=Math.floor(player.x),py=Math.floor(player.y),queue=[[px,py]],seen=new Set([px+','+py]),candidates=[];
+ const occupied=localEnemies(),props=propsFor(layer).filter(p=>!p.decorative);
+ for(const [x,y] of queue){
+  const cx=x+.5,cy=y+.5,range=distance(cx,cy,player.x,player.y);
+  if(range>=2.2&&distance(cx,cy,site.x,site.y)<=4.5&&!structureAt(x,y)&&
+    !props.some(p=>distance(cx,cy,p.x,p.y)<.9)&&!occupied.some(p=>distance(cx,cy,p.x,p.y)<.85))candidates.push([x,y]);
+  for(const [dx,dy] of [[0,-1],[1,0],[0,1],[-1,0]]){
+   const nx=x+dx,ny=y+dy,key=nx+','+ny;
+   if(seen.has(key)||Math.abs(nx-px)+Math.abs(ny-py)>7)continue;
+   seen.add(key);
+   if(canMove(nx+.5,ny+.5)&&canMove(cx+dx*.5,cy+dy*.5))queue.push([nx,ny]);
+  }
+ }
+ const salt=site.level*13+(site.siteType==='camp'?1:2);
+ candidates.sort((a,b)=>hashInt(a[0],a[1],salt)-hashInt(b[0],b[1],salt));
+ const count=site.level>=4?3:2;
+ let spawned=0;
+ for(const [x,y] of candidates){
+  if(spawned>=count||enemies.size>=650)break;
+  const id=site.id+':'+(site.danger==='ambush'?'ambush':'guard')+':'+spawned;
+  if(!enemies.has(id)&&!defeatedEnemies.has(id))addWorldCreature(id,creatureKind(x,y,layer),x+.5,y+.5,false,3);
+  spawned++;
+ }
+ return spawned;
+}
+function siteSupplies(site,state){
+ const l=site.level,salt=1401+state.cycle*23+(site.siteType==='camp'?1:0);
+ const roll=hashInt(l,4,salt),extra=l>=4?['hierro','cristal','tonico']:['carbon','cobre','vendaje'];
+ const items=[{id:site.siteType==='camp'?'madera':'piedra',n:2+Math.floor(l/2)},
+  {id:l>=3?'carbon':'antorcha',n:1+Math.floor(l/3)},
+  {id:extra[Math.min(2,Math.floor(roll*3))],n:1}];
+ if(!state.uniqueClaimed&&state.cycle===0&&hashInt(l,5,salt)<.45)
+  items.push({id:l>=5?'runa_veta':l>=3?'mithril':'cristal',n:1,unique:true});
+ return items;
+}
+function investigateSite(site){
+ const state=discoverSite(site);
+ visitExplorationSites();
+ if(!state.ambushed&&site.danger==='ambush'){
+  state.ambushed=true;
+  if(spawnSiteCreatures(site)){
+   queueSave();
+   toast('¡Emboscada! Hay criaturas cerca. Vuelve al contenedor cuando puedas.',2800,'warning');
+   return null;
+  }
+ }
+ state.searched=true;
+ return state;
+}
+function nearbySiteScenery(props){
+ const scenery=[];
+ for(const site of explorationSites(layer)){
+  if(!siteProgress.has(site.id)||distance(player.x,player.y,site.x,site.y)>11)continue;
+  for(const [dx,dy,kind] of [...SITE_SHAPES[site.siteType],[0,-1,'site_clue']]){
+   const x=site.x+dx,y=site.y+dy;
+   if(tileAt(x,y)!==T.FLOOR||!vis.has(Math.floor(x)+','+Math.floor(y))||structureAt(x,y)||
+     props.some(p=>distance(p.x,p.y,x,y)<.85))continue;
+   scenery.push(kind==='site_clue'?{x,y,kind,id:site.id+':clue',siteClue:site,label:'Restos de la expedición'}:
+    {x,y,kind:kind==='site_trace'?SITE_TRACES[layer-1]:kind,decorative:true,siteScenery:true});
+  }
+ }
+ return scenery;
+}
+function siteMarkerColor(site){
+ const state=siteProgress.get(site.id);
+ if(!state)return null;
+ return state.items?.length===0||state.cycle>0?'#8aaa9a':'#dfb167';
+}
+function openExplorationSite(site){
+ const state=investigateSite(site);
+ if(!state)return;
+ if(state.items===null||(!state.items.length&&state.refillAt!==null&&activePlaySeconds>=state.refillAt)){
+  if(state.items!==null)state.cycle++;
+  state.items=siteSupplies(site,state);state.refillAt=null;
+ }
+ openSite=site;queueSave();showModal('site');
+}
+function sitePanel(){
+ const state=siteProgress.get(openSite?.id);
+ if(!state)return '';
+ const contents=state.items.map((it,i)=>`<button class="item-slot" type="button" data-site-take="${i}" aria-label="Recoger ${ITEMS[it.id].name} ×${it.n}${it.unique?' (único)':''}" title="${ITEMS[it.id].name}${it.unique?' · Hallazgo único':''}"><span class="item-symbol">${itemArt(it.id)}</span><span class="item-count">${it.n}</span></button>`).join('');
+ const empty=state.refillAt===null?'No quedan suministros.':'Se reabastece en '+Math.max(1,Math.ceil((state.refillAt-activePlaySeconds)/60))+' min de exploración activa.';
+ return `<p class="panel-text">${openSite.msg}</p><h3 class="inv-subheading">SUMINISTROS · TOCA PARA RECOGER</h3>
+  ${contents?`<div class="inventory40 chest-grid">${contents}</div>`:`<p class="panel-text">${empty}</p>`}
+  <div class="panel-actions"><button class="primary" data-a="resume">CERRAR</button></div>`;
+}
+function takeSiteItem(index){
+ const state=siteProgress.get(openSite?.id),item=state?.items[index];
+ if(!item)return;
+ const left=storeIn(inventory,item.id,item.n);
+ if(left===item.n){toast('No hay espacio en la mochila.',1900,'warning');return;}
+ if(left)item.n=left;
+ else{if(item.unique)state.uniqueClaimed=true;state.items.splice(index,1);}
+ if(!state.items.length)state.refillAt=activePlaySeconds+SITE_REFILL;
+ refreshHotbar();queueSave();showModal('site');
+}
+function restoreExploration(data){
+ activePlaySeconds=Number.isFinite(data?.seconds)?Math.max(0,data.seconds):0;
+ siteProgress=new Map();openSite=null;
+ const entries=new Map(Array.isArray(data?.sites)?data.sites.filter(e=>Array.isArray(e)&&e.length===2):[]);
+ for(let l=1;l<=6;l++)for(const site of explorationSites(l)){
+  const state=entries.get(site.id);
+  if(!state||typeof state!=='object')continue;
+  const uniqueClaimed=state.uniqueClaimed===true,cycle=Number.isSafeInteger(state.cycle)?Math.max(0,state.cycle):0;
+  const items=Array.isArray(state.items)?state.items.slice(0,8).filter(it=>it&&Object.hasOwn(ITEMS,it.id)&&Number.isInteger(it.n)&&it.n>0&&(!it.unique||(!uniqueClaimed&&cycle===0)))
+   .map(it=>({id:it.id,n:Math.min(it.n,ITEMS[it.id].max||99),...(it.unique===true?{unique:true}:{})})):null;
+  siteProgress.set(site.id,{searched:state.searched===true,occupied:state.occupied===true,ambushed:state.ambushed===true,uniqueClaimed,cycle,items,
+   refillAt:Number.isFinite(state.refillAt)&&items?.length===0?Math.max(0,state.refillAt):null});
+ }
+}
 function awayFrom(point,others,minimum,l,salt){let p=point;for(let j=0;j<9&&others.some(q=>distance(p.x,p.y,q.x,q.y)<minimum);j++)p=seededPoint(l,salt+j*17,72+j*3,112+j*3);return p;}
 function worldLayout(l){if(!worldLayoutVersion)return null;
  const k=seed+':'+l;let g=layoutCache.get(k);if(g)return g;
@@ -1591,7 +1752,7 @@ function propsFor(l){
      {id:'forge',kind:'anvil',x:s[3].x,y:s[3].y,label:'Yunque del Clan',msg:'Pulsa MANO para mejorar herramientas.'});
   }
   if(l===1)props.push({id:'crystal_cache',kind:'supplycache',x:g.cache.x,y:g.cache.y,label:story39.openedChests.includes('crystal_cache')?'Alijo de los mineros · vacío':'Alijo oculto de los mineros',msg:'Un escondite olvidado entre las rocas.'});
-  if(l>=1&&l<=6)g.ruins.forEach((q,i)=>props.push({id:`ruin_${l}_${i}`,kind:'ruin',x:q.x,y:q.y,label:i?'Campamento minero abandonado':'Restos de una antigua torre',msg:l===1&&i===0?'Un rastro de huellas se pierde hacia el '+directionHint(q,{x:g.dungeon.x+.5,y:g.dungeon.y+.5})+'.':i?'Un plano gastado señala un descenso hacia el '+directionHint(q,g.down)+'.':'Las marcas de pico apuntan hacia el '+directionHint(q,g.shaftDown)+'.'}));
+  props.push(...explorationSites(l));
  }
  if(l===7){props[0].id='heart';props[0].kind='monument';props[0].label='La Última Fragua';props[0].to=undefined;props[0].msg='Has alcanzado el corazón del reino.';props.splice(1,1);}
  if(l===1)props.push(...dungeonProps());
@@ -1615,7 +1776,11 @@ function glowPropsFor(l){
  glowPropCache.set(l,props);
  return props.filter(p=>!structureAt(p.x,p.y)&&!floorAt(p.x,p.y));
 }
-const currentProps=()=>[...propsFor(layer),...currentBuilt(),...nearbyWood()];
+function currentProps(includeScenery=false){
+ const props=[...propsFor(layer),...currentBuilt(),...nearbyWood()];
+ const scenery=nearbySiteScenery(props);
+ return props.concat(includeScenery?scenery:scenery.filter(p=>p.siteClue));
+}
 function solid(x,y){return tileAt(x,y)!==T.FLOOR;}
 function blockedByDungeonGate(x,y){
  if(layer!==1)return false;
@@ -1852,6 +2017,10 @@ function chooseCreatureAt(x,y){
  }
  return candidate;
 }
+function addWorldCreature(id,kind,x,y,elite,webClock){
+ const max=Math.ceil(MOB_SPECS[kind].hp*depthStats(layer).health*(elite?1.45:1));
+ enemies.set(id,{id,layer,kind,elite,x,y,hp:max,maxHp:max,hit:0,attack:0,webClock,windup:0,stagger:0,dx:0,dy:1});
+}
 function creatureSpawnCheck(){
  if(enemies.size>650)return;
  let nearby=localEnemies().length;
@@ -1866,8 +2035,7 @@ function creatureSpawnCheck(){
   if(webIsProtected(x,y)||(inDungeon(x,y)&&dungeonLocal(x,y).x>=66)||tileAt(x,y)!==T.FLOOR||structureAt(x,y))continue;
   const kind=creatureKind(gx,gy,layer);
   const elite=layer>=3&&hashInt(gx,gy,433+layer)>(.97-(layer-3)*.012);
-  const max=Math.ceil(MOB_SPECS[kind].hp*depthStats(layer).health*(elite?1.45:1));
-  enemies.set(id,{id,layer,kind,elite,x:x+.5,y:y+.5,hp:max,maxHp:max,hit:0,attack:0,webClock:2.0+hashInt(gx,gy,9)*4,windup:0,stagger:0,dx:0,dy:1});
+  addWorldCreature(id,kind,x+.5,y+.5,elite,2+hashInt(gx,gy,9)*4);
   nearby++;
  }
 }
@@ -2094,6 +2262,11 @@ function doInteract(explicitTarget){
  toast(aimError,1550,'warning');
 }
 function interactWithProp(p){
+ if(p.siteType){openExplorationSite(p);return;}
+ if(p.siteClue){
+  if(investigateSite(p.siteClue)){toast(p.siteClue.msg,3000);queueSave();}
+  return;
+ }
  if(p.kind==='supplycache'){
   if(story39.openedChests.includes(p.id)){toast('Este alijo ya fue registrado. No queda nada.',1700);return;}
   story39.openedChests.push(p.id);gain('cristal',1);gain('antorcha',2);
@@ -2211,7 +2384,7 @@ function updateHud(){refreshProgressionHud();UI.region.textContent=LEVELS[layer]
 
 function b64(uint){let s='';for(let i=0;i<uint.length;i++)s+=String.fromCharCode(uint[i]);return btoa(s);}
 function fromB64(str){const s=atob(str),r=new Uint8Array(CH*CH);for(let i=0;i<Math.min(s.length,r.length);i++)r[i]=s.charCodeAt(i);return r;}
-function snapshot(){return{version:4,progression:{...progression,skills:{...progression.skills}},story39:{...story39,clues:[...story39.clues],openedChests:[...story39.openedChests],remainsSearched:[...story39.remainsSearched]},boss39:battleSaveState(),stamina:Math.round(stamina),enemies:[...enemies.values()].map(e=>({...e})),defeatedEnemies:[...defeatedEnemies],webs:[...webs],starterGelGranted,equipment:Object.fromEntries(Object.entries(equipment).map(([k,v])=>[k,v?{...v}:null])),structuralWear:[...dismantleDamage],miningWear:[...breakDamage],blueprints:[...blueprint],floorTiles:[...floorTiles],inventory:inventory.map(it=>it?{...it}:null),runeSockets:{...toolRunes},slot,structures:[...structures],backs:[...backs],placedBlocks:[...placedBlocks],harvested:[...harvested],groundDrops,deathBags,mainBase,respawn,hp,seed,worldLayoutVersion,layer,gender:player.gender,position:{x:player.x,y:player.y},steps:player.steps,pick:player.pick||1,weaponTier:player.weaponTier||0,armorTier:player.armorTier||0,stats:{...stats},ore:{...ores},visited:[...visitedLevels],edits:[...mined.entries()],exploration:[...fog.entries()].map(([k,v])=>[k,b64(v)]),savedAt:new Date().toISOString()};}
+function snapshot(){return{version:4,explorationSites:{seconds:activePlaySeconds,sites:[...siteProgress].map(([id,state])=>[id,{...state,items:state.items?.map(it=>({...it}))??null}])},progression:{...progression,skills:{...progression.skills}},story39:{...story39,clues:[...story39.clues],openedChests:[...story39.openedChests],remainsSearched:[...story39.remainsSearched]},boss39:battleSaveState(),stamina:Math.round(stamina),enemies:[...enemies.values()].map(e=>({...e})),defeatedEnemies:[...defeatedEnemies],webs:[...webs],starterGelGranted,equipment:Object.fromEntries(Object.entries(equipment).map(([k,v])=>[k,v?{...v}:null])),structuralWear:[...dismantleDamage],miningWear:[...breakDamage],blueprints:[...blueprint],floorTiles:[...floorTiles],inventory:inventory.map(it=>it?{...it}:null),runeSockets:{...toolRunes},slot,structures:[...structures],backs:[...backs],placedBlocks:[...placedBlocks],harvested:[...harvested],groundDrops,deathBags,mainBase,respawn,hp,seed,worldLayoutVersion,layer,gender:player.gender,position:{x:player.x,y:player.y},steps:player.steps,pick:player.pick||1,weaponTier:player.weaponTier||0,armorTier:player.armorTier||0,stats:{...stats},ore:{...ores},visited:[...visitedLevels],edits:[...mined.entries()],exploration:[...fog.entries()].map(([k,v])=>[k,b64(v)]),savedAt:new Date().toISOString()};}
 function normalizeSave(s){return s&&(s.version===2||s.version===3||s.version===4)&&Number.isFinite(s.seed)&&s.position&&Number.isFinite(s.position.x)&&s.position.x>=-MAX&&s.position.x<=MAX&&Number.isInteger(s.layer)&&s.layer>=0&&s.layer<LAYERS&&Array.isArray(s.edits)&&Array.isArray(s.exploration)?s:null;}
 function openDB(){return new Promise(resolve=>{if(!('indexedDB'in window))return resolve(null);let req;try{req=indexedDB.open(DB_NAME,1);}catch{return resolve(null);}req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains(DB_STORE))req.result.createObjectStore(DB_STORE)};req.onsuccess=()=>resolve(req.result);req.onerror=()=>resolve(null);req.onblocked=()=>resolve(null);});}
 async function readStored(){try{if(db){const r=await new Promise(resolve=>{try{let req=db.transaction(DB_STORE,'readonly').objectStore(DB_STORE).get('current');req.onsuccess=()=>resolve(req.result);req.onerror=()=>resolve(null);}catch{resolve(null)}});if(normalizeSave(r))return r;}}catch{}
@@ -2223,7 +2396,7 @@ function queueSave(silent=true){if(!playing)return Promise.resolve(false);const 
 function restore(s){clearAimSelection();story39={...freshStory39(),...(s.story39&&typeof s.story39==='object'?s.story39:{prologueSeen:true})};story39.seals=Array.isArray(story39.seals)?story39.seals.filter(x=>DUNGEON_SEALS.includes(x)):[];if(story39.widowDefeated)story39.seals=[...DUNGEON_SEALS];story39.clues=Array.isArray(story39.clues)?story39.clues.filter(x=>STORY_FRAGMENTS[x]).slice(0,20):[];story39.openedChests=Array.isArray(story39.openedChests)?story39.openedChests.filter(x=>typeof x==='string').slice(0,30):[];story39.remainsSearched=Array.isArray(story39.remainsSearched)?[...new Set(story39.remainsSearched.filter(x=>typeof x==='string'))].slice(0,3000):[];remainsChunkCache.clear();pendingBattle39=s.boss39&&!story39.widowDefeated?s.boss39:null;bossBattle=null;stamina=clamp(Number.isFinite(s.stamina)?s.stamina:100,0,100);staminaDelay=0;dodgeTime=0;dodgeCooldown=0;swordCharging=false;attackFX=null;enemies=new Map();defeatedEnemies=new Set(Array.isArray(s.defeatedEnemies)?s.defeatedEnemies.filter(x=>typeof x==='string').slice(0,15000):[]);webs=new Map();selectedEnemy=null;
  for(const e of Array.isArray(s.enemies)?s.enemies.slice(0,800):[]){if(e&&typeof e.id==='string'&&!!MOB_SPECS[e.kind]&&Number.isInteger(e.layer)&&e.layer>=0&&e.layer<LAYERS&&Number.isFinite(e.x)&&Number.isFinite(e.y)&&Number.isFinite(e.hp)&&e.hp>0&&inWorld(e.x,e.y))enemies.set(e.id,{id:e.id,kind:e.kind,layer:e.layer,x:e.x,y:e.y,hp:e.hp,maxHp:e.maxHp||MOB_SPECS[e.kind].hp,hit:0,attack:0,webClock:3,windup:0,stagger:0,dx:0,dy:1,elite:!!e.elite,poison:clamp(Number(e.poison)||0,0,3),poisonTick:clamp(Number(e.poisonTick)||1,.01,2)});}
  for(const entry of Array.isArray(s.webs)?s.webs.slice(0,2000):[]){const [k,w]=entry||[];if(typeof k==='string'&&w&&Number.isInteger(w.layer)&&w.layer>=0&&w.layer<LAYERS&&inWorld(w.x,w.y))webs.set(k,{x:w.x,y:w.y,layer:w.layer,hp:Math.max(1,Math.min(2,w.hp||2)),owner:String(w.owner||'')});}
- dismantleDamage.clear();breakDamage.clear();dismantleFX=null;resetMiningFocus();invalidateLights();blueprint.clear();blueprintHistory=[];ghostCells=[];seed=s.seed>>>0;worldLayoutVersion=s.worldLayoutVersion===1?1:0;layoutCache.clear();layer=s.layer;player={x:s.position.x,y:s.position.y,gender:s.gender==='female'?'female':'male',dirX:0,dirY:1,face:'down',walk:0,steps:+s.steps||0,pick:clamp(+s.pick||1,1,5),weaponTier:clamp(+s.weaponTier||0,0,3),armorTier:clamp(+s.armorTier||0,0,3)};
+ dismantleDamage.clear();breakDamage.clear();dismantleFX=null;resetMiningFocus();invalidateLights();blueprint.clear();blueprintHistory=[];ghostCells=[];seed=s.seed>>>0;worldLayoutVersion=s.worldLayoutVersion===1?1:0;layoutCache.clear();layer=s.layer;restoreExploration(s.explorationSites);player={x:s.position.x,y:s.position.y,gender:s.gender==='female'?'female':'male',dirX:0,dirY:1,face:'down',walk:0,steps:+s.steps||0,pick:clamp(+s.pick||1,1,5),weaponTier:clamp(+s.weaponTier||0,0,3),armorTier:clamp(+s.armorTier||0,0,3)};
  stats={mined:0,explored:0,visits:0,transitions:0,...s.stats};progression=restoreProgression(s.progression,stats);refreshProgressionHud();ores=s.ore&&typeof s.ore==='object'?{...s.ore}:{};visitedLevels=new Set(s.visited||[0]);
  mined=new Map();fog=new Map();chunkCache.clear();glowPropCache.clear();for(const [k,e] of s.edits){if(typeof k==='string'&&e&&typeof e==='object')mined.set(k,e);}for(const [k,a] of s.exploration){try{if(typeof k==='string'&&typeof a==='string')fog.set(k,fromB64(a))}catch{}}
 
@@ -2261,7 +2434,7 @@ function restore(s){clearAimSelection();story39={...freshStory39(),...(s.story39
  else{startingInventory();for(const [id,n] of Object.entries(ores))if(ITEMS[id]&&n>0){let remaining=storeIn(inventory,id,n);if(remaining)dropAt(id,remaining,.5,.5,0);}}
  if(!s.starterGelGranted){const rest=storeIn(inventory,'gel',4);if(rest)dropAt('gel',rest,player.x,player.y,layer);starterGelGranted=true;}else starterGelGranted=true;
  refreshHotbar();updateBlueprintUI();chunkCache.clear();selectedTile=null;if(!canMove(player.x,player.y)){if(layer===1&&inDungeon(player.x,player.y)){({x:player.x,y:player.y}=dungeonPoint(26.5,.5));}else{player.x=START.x;player.y=START.y;}}screen.camX=player.x;screen.camY=player.y;}
-function newGame(){progression=freshProgression();refreshProgressionHud();story39=freshStory39();remainsChunkCache.clear();bossBattle=null;pendingBattle39=null;stamina=MAX_STAMINA;staminaDelay=0;dodgeTime=0;dodgeCooldown=0;swordCharging=false;attackFX=null;enemies.clear();defeatedEnemies.clear();webs.clear();selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();invalidateLights();blueprint.clear();blueprintHistory=[];ghostCells=[];seed=(Math.random()*0x7fffffff)>>>0;worldLayoutVersion=1;layoutCache.clear();layer=0;chunkCache.clear();glowPropCache.clear();mined.clear();fog.clear();vis.clear();stats={mined:0,explored:0,visits:1,transitions:0};ores={piedra:0,tierra:0,cobre:0};visitedLevels=new Set([0]);breakDamage.clear();selectedTile=null;structures.clear();backs.clear();floorTiles.clear();placedBlocks.clear();harvested.clear();groundDrops=[];deathBags=[];mainBase=null;respawn={layer:0,x:.5,y:.5};hp=100;targetCell=null;equipment={head:null,chest:null,legs:null,feet:null,offhand:null};toolRunes={sword:null,pick:null};runeTarget='sword';starterGelGranted=true;startingInventory();refreshHotbar();
+function newGame(){activePlaySeconds=0;siteProgress.clear();openSite=null;progression=freshProgression();refreshProgressionHud();story39=freshStory39();remainsChunkCache.clear();bossBattle=null;pendingBattle39=null;stamina=MAX_STAMINA;staminaDelay=0;dodgeTime=0;dodgeCooldown=0;swordCharging=false;attackFX=null;enemies.clear();defeatedEnemies.clear();webs.clear();selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();invalidateLights();blueprint.clear();blueprintHistory=[];ghostCells=[];seed=(Math.random()*0x7fffffff)>>>0;worldLayoutVersion=1;layoutCache.clear();layer=0;chunkCache.clear();glowPropCache.clear();mined.clear();fog.clear();vis.clear();stats={mined:0,explored:0,visits:1,transitions:0};ores={piedra:0,tierra:0,cobre:0};visitedLevels=new Set([0]);breakDamage.clear();selectedTile=null;structures.clear();backs.clear();floorTiles.clear();placedBlocks.clear();harvested.clear();groundDrops=[];deathBags=[];mainBase=null;respawn={layer:0,x:.5,y:.5};hp=100;targetCell=null;equipment={head:null,chest:null,legs:null,feet:null,offhand:null};toolRunes={sword:null,pick:null};runeTarget='sword';starterGelGranted=true;startingInventory();refreshHotbar();
  player={x:START.x,y:START.y,gender:selCharacter,dirX:0,dirY:1,face:'down',walk:0,steps:0,pick:1,weaponTier:0,armorTier:0};screen.camX=player.x;screen.camY=player.y;startPlay();toast('⛏ Toca una pared y mantén PICAR.',2600);}
 function continueGame(s){restore(s);startPlay();toast('Has regresado a '+LEVELS[layer].name,1400,'common');}
 function startPlay(){clearAimSelection();refreshProgressionHud();if(layer===1)seedDungeon();refreshHotbar();refreshLampButton();playing=true;paused=false;refreshCombatUI();UI.menu.classList.add('hidden');UI.hud.classList.remove('hidden');UI.modal.classList.add('hidden');modalType='';reveal();updateHud();updateContext();updateBlueprintUI();queueSave();if(!story39.prologueSeen)openStory39('prologue');else if(pendingBattle39){const saved=pendingBattle39;pendingBattle39=null;startWidowBattle(saved);}try{canvas.focus({preventScroll:true})}catch{}}
@@ -2292,6 +2465,8 @@ function showModal(type){if(!playing)return;clearAimSelection();const previousMo
   title.textContent='Progresión · Habilidades';body.innerHTML=skillsPanel();
  }else if(type==='chest'){
   title.textContent='Cofre · Almacenamiento';body.innerHTML=chestPanel();
+ }else if(type==='site'){
+  title.textContent=openSite.label;body.innerHTML=sitePanel();
  }else if(type==='furnace'){
   title.textContent='Horno · La Forja';body.innerHTML=furnacePanel();
  }else{
@@ -2318,6 +2493,7 @@ function showModal(type){if(!playing)return;clearAimSelection();const previousMo
  }
  if(previousModalType!==type){const card=UI.modal.querySelector('.panel-card');if(card)card.scrollTop=0;}
  if(type==='bag'||type==='craft'||type==='chest')hookInventory(body,type);
+ if(type==='site')body.querySelectorAll('[data-site-take]').forEach(b=>b.addEventListener('click',()=>takeSiteItem(+b.dataset.siteTake)));
  if(type==='runes')body.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>showModal(b.dataset.view)));
  if(type==='forge'){body.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>showModal(b.dataset.view)));body.querySelectorAll('[data-upgrade]').forEach(b=>b.addEventListener('click',()=>upgradeEquipment(b.dataset.upgrade,'forge')));}
  if(type==='journal')hookJournalControls();
@@ -2345,7 +2521,7 @@ function showModal(type){if(!playing)return;clearAimSelection();const previousMo
    if(confirm('¿Volver al menú y crear un mundo nuevo? Antes puedes exportar el guardado. La partida 1.6 y Alpha 1 NO se modificarán.')){closeModal();playing=false;paused=true;UI.hud.classList.add('hidden');UI.menu.classList.remove('hidden');$('btn-resume').classList.remove('hidden');}}
  }));
 }
-function closeModal(){invSource=null;UI.modal.classList.add('hidden');paused=false;modalType='';try{canvas.focus({preventScroll:true})}catch{}}
+function closeModal(){openSite=null;invSource=null;UI.modal.classList.add('hidden');paused=false;modalType='';try{canvas.focus({preventScroll:true})}catch{}}
 function exportGame(){const data=JSON.stringify(snapshot());const blob=new Blob([data],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='La-Ultima-Fragua-Alpha3942-respaldo.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Respaldo descargado. Guárdalo en un lugar seguro.');}
 // Alpha 3.9.3.1: minimapa local, circular y limitado a la exploración descubierta.
 // Canvas independiente del mapa grande; no modifica el guardado ni el terreno.
@@ -2364,9 +2540,10 @@ function drawMiniMap(){
  }
  // Marca de escalera conocida y enemigos descubiertos, sin revelar terreno oculto.
  for(const p of propsFor(layer)){
-  if(p.to===undefined||!fogAt(p.x,p.y))continue;
+  const color=p.siteType?siteMarkerColor(p):p.to===undefined?null:'#e6bf79';
+  if(!color||!fogAt(p.x,p.y))continue;
   const x=center+(p.x-player.x)*scale,y=center+(p.y-player.y)*scale;
-  if(Math.hypot(x-center,y-center)<center-7){g.fillStyle='#e6bf79';g.fillRect(Math.round(x)-2,Math.round(y)-2,4,4);}
+  if(Math.hypot(x-center,y-center)<center-7){g.fillStyle=color;g.fillRect(Math.round(x)-2,Math.round(y)-2,4,4);}
  }
  for(const e of enemies.values()){
   if(e.layer!==layer||e.hp<=0||!vis.has(Math.floor(e.x)+','+Math.floor(e.y)))continue;
@@ -2382,7 +2559,12 @@ function drawMap(){const c=$('exploration-map');if(!c)return;const g=c.getContex
  const pal=['#71837d','#4f5765','#70503a','#a46c45','#252a34','#a5aeb2','#6daeb5','#7c91cb','#c26f56','#9a8ec1','#d7b85b'];
  for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
   if(!inWorld(x,y)||!fogAt(x,y))continue;const t=tileAt(x,y);g.fillStyle=pal[t]||'#4f5760';g.fillRect(Math.floor((x-mapView.x)*z+c.width/2),Math.floor((y-mapView.y)*z+c.height/2),Math.ceil(z)+1,Math.ceil(z)+1);}
- for(const p of currentProps()){if(!fogAt(Math.floor(p.x),Math.floor(p.y)))continue;const x=(p.x-mapView.x)*z+c.width/2,y=(p.y-mapView.y)*z+c.height/2;g.fillStyle=(p.to===undefined)?'#d59c70':'#f2cf89';g.fillRect(x-3,y-3,7,7);}
+ for(const p of currentProps()){
+  const color=p.siteClue?null:p.siteType?siteMarkerColor(p):p.to===undefined?'#d59c70':'#f2cf89';
+  if(!color||!fogAt(p.x,p.y))continue;
+  const x=(p.x-mapView.x)*z+c.width/2,y=(p.y-mapView.y)*z+c.height/2;
+  g.fillStyle=color;g.fillRect(x-3,y-3,7,7);
+ }
  for(const b of deathBags)if(b.layer===layer&&fogAt(b.x,b.y)){g.fillStyle='#f48c63';g.fillRect((b.x-mapView.x)*z+c.width/2-3,(b.y-mapView.y)*z+c.height/2-3,6,6);}
  const px=(player.x-mapView.x)*z+c.width/2,py=(player.y-mapView.y)*z+c.height/2;g.fillStyle='#ffffff';g.beginPath();g.arc(px,py,4,0,Math.PI*2);g.fill();$('map-coord').textContent='x '+Math.floor(mapView.x)+', y '+Math.floor(mapView.y)+' · Nivel '+layer;
 }
@@ -2430,6 +2612,15 @@ for(const g of ['male','female'])for(const f of ['up','down','left','right'])for
 
 function pixRect(x,y,w,h,color){ctx.fillStyle=color;ctx.fillRect(Math.round(x),Math.round(y),Math.max(1,Math.round(w)),Math.max(1,Math.round(h)));}
 function drawProp(p,t){let a=worldToScreen(p.x,p.y),s=t*.84,x=Math.round(a.x),y=Math.round(a.y);const dark='#2b272d';
+ if(p.siteType){
+  if(!vis.has(Math.floor(p.x)+','+Math.floor(p.y))||structureAt(p.x,p.y))return;
+  drawProp(p.siteType==='tower'?{...p,siteType:null,kind:'dungeonchest'}:{...p,siteType:null,kind:'crate',decorative:true},t);return;
+ }
+ if(p.siteClue){drawProp({...p,siteClue:null,kind:'dungeonrecord'},t);return;}
+ if(p.kind==='site_embers'){
+  pixRect(x-s*.34,y-s*.14,s*.68,s*.28,'#50474b');pixRect(x-s*.22,y-s*.08,s*.44,s*.16,'#2b252b');
+  pixRect(x-s*.14,y-s*.05,s*.28,s*.08,LEVELS[layer].accent);return;
+ }
  if(p.kind==='mine_remains'){
   const img=REMAINS_IMAGES.get(p.sprite);
   ctx.fillStyle='rgba(2,4,9,.38)';ctx.beginPath();ctx.ellipse(x,y+s*.32,s*.41,s*.15,0,0,2*Math.PI);ctx.fill();
@@ -2926,7 +3117,7 @@ function render(t){const w=screen.w,h=screen.h;ctx.setTransform(canvas.width/w,0
  for(const web of webs.values())if(web.layer===layer&&web.x>=x0-1&&web.x<=x1+1&&web.y>=y0-1&&web.y<=y1+1&&vis.has(web.x+','+web.y))drawWeb(web,t);
  const mobs=localEnemies();
  for(const mob of mobs)if(mob.x>=x0-1&&mob.x<=x1+1&&mob.y>=y0-1&&mob.y<=y1+1)entities.push({kind:'mob',y:mob.y,p:mob});
- const props=currentProps();
+ const props=currentProps(true);
  if(handSelection&&!handSelection.error&&handTargetError(tappedHandTarget(props)))handSelection=null;
  const pickEquipped=pickedItem()?.id==='pick';
  const pickTarget=pickEquipped&&canAim()?miningTarget(props):null;
@@ -2941,9 +3132,10 @@ function render(t){const w=screen.w,h=screen.h;ctx.setTransform(canvas.width/w,0
  const preview=ghostCells.length?new Map(blueprint):blueprint;
  for(const c of ghostCells)preview.set(plannedKey(c.id,c.x,c.y,c.layer),c);
  const previewCells=[...preview.values()].sort((a,b)=>Number(isFloorItem(b.id))-Number(isFloorItem(a.id)));
+ const buildProps=previewCells.length?props.filter(p=>!p.siteClue&&!p.siteScenery):props;
  for(const c of previewCells){
   if(c.layer!==layer||c.x<x0-1||c.x>x1+1||c.y<y0-1||c.y>y1+1)continue;
-  const a=worldToScreen(c.x,c.y),kind=buildKind(c.id),valid=!validateBlueprintCell(c,preview,props,mobs);
+  const a=worldToScreen(c.x,c.y),kind=buildKind(c.id),valid=!validateBlueprintCell(c,preview,buildProps,mobs);
   ctx.save();ctx.globalAlpha=.62;renderBlueprintPreview=true;
   if(kind==='woodback'||kind==='stoneback'||kind==='door'){
    drawProp({x:c.x+.5,y:c.y+.5,kind:kind==='woodback'?'woodwall':kind==='stoneback'?'stonewall':'door',open:false},t);
@@ -3029,11 +3221,11 @@ function update(dt){if(!playing||paused)return;
  const ahead=CAMERA_LOOK_AHEAD/(Math.hypot(player.dirX,player.dirY)||1);
  screen.camX+=(clamp(player.x+player.dirX*ahead,-MAX+20,MAX-20)-screen.camX)*f;
  screen.camY+=(clamp(player.y+player.dirY*ahead,-MAX+12,MAX-12)-screen.camY)*f;
- if(frameCount%7===0){reveal();collectDrops();if(pickedItem()?.id!=='pick')updateContext();if(blueprint.size)updateBlueprintUI();updateHud();}
+ if(frameCount%7===0){reveal();visitExplorationSites();collectDrops();if(pickedItem()?.id!=='pick')updateContext();if(blueprint.size)updateBlueprintUI();updateHud();}
  if(layer>=5&&tileAt(player.x,player.y)===T.FLOOR&&hashInt(Math.floor(player.x),Math.floor(player.y),12)>.985){hazardClock+=dt;if(hazardClock>=.7){hp-=Math.max(2,6-Math.floor(totalArmor()/3));hazardClock=0;if(hp<=0)die();}}else hazardClock=0;
  autoSaveTime+=dt;if(autoSaveTime>9){autoSaveTime=0;queueSave();}
 }
-function tick(ts){if(ts-minimapLast>360){minimapLast=ts;drawMiniMap();}let dt=lastTs?Math.min(.055,(ts-lastTs)/1000):.016;lastTs=ts;if(!playing){blink+=dt;screen.camX+=(START.x-screen.camX)*Math.min(1,dt*2);screen.camY+=(START.y-screen.camY)*Math.min(1,dt*2);}
+function tick(ts){if(ts-minimapLast>360){minimapLast=ts;drawMiniMap();}let dt=lastTs?Math.min(.055,(ts-lastTs)/1000):.016;advanceExplorationClock(lastTs?(ts-lastTs)/1000:0);lastTs=ts;if(!playing){blink+=dt;screen.camX+=(START.x-screen.camX)*Math.min(1,dt*2);screen.camY+=(START.y-screen.camY)*Math.min(1,dt*2);}
  if(playing&&Math.floor(ts/400)!==Math.floor((ts-dt*1000)/400))tickAllFurnaces();
  update(dt);render(screen.tile);if(bossBattle)drawBattleFrame39(ts);refreshFurnaceProgress();if(toastUntil&&ts>toastUntil){UI.toast.classList.remove('visible');toastUntil=0;}requestAnimationFrame(tick);}
 function resetJoy(){joystick.active=false;joystick.id=null;joystick.x=joystick.y=0;UI.knob.style.left='50%';UI.knob.style.top='50%';}
@@ -3170,7 +3362,7 @@ UI.hudToggle.addEventListener('click',()=>{
 $('btn-progression').addEventListener('click',()=>showModal('skills'));UI.mapBtn.addEventListener('click',()=>showModal('map'));$('btn-journal').addEventListener('click',()=>showModal('journal'));$('btn-pack').addEventListener('click',()=>showModal('bag'));$('btn-craft').addEventListener('click',()=>showModal('craft'));$('btn-pause').addEventListener('click',()=>showModal('pause'));$('modal-close').addEventListener('click',closeModal);
 UI.modal.addEventListener('click',e=>{if(e.target===UI.modal)closeModal();});
 $('import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;try{const data=normalizeSave(JSON.parse(await file.text()));if(!data)throw Error('Guardado inválido');if(!confirm('¿Reemplazar la partida Alpha 3.9.4.2 actual con este respaldo?'))return;const ok=await writeStored(data);if(!ok)throw Error('No se pudo almacenar');restore(data);startPlay();toast('Respaldo importado correctamente.');}catch(err){alert('No se pudo importar: '+err.message);}});
-window.addEventListener('resize',resize);window.addEventListener('orientationchange',()=>setTimeout(resize,100));if(window.visualViewport){window.visualViewport.addEventListener('resize',resize);window.visualViewport.addEventListener('scroll',resize);}window.addEventListener('pagehide',()=>queueSave());document.addEventListener('visibilitychange',()=>{if(document.hidden)queueSave();});
+window.addEventListener('resize',resize);window.addEventListener('orientationchange',()=>setTimeout(resize,100));if(window.visualViewport){window.visualViewport.addEventListener('resize',resize);window.visualViewport.addEventListener('scroll',resize);}window.addEventListener('pagehide',()=>queueSave());document.addEventListener('visibilitychange',()=>{lastTs=0;if(document.hidden)queueSave();});
 async function init(){configureStory39();resize();seed=57813;screen.camX=START.x;screen.camY=START.y;db=await openDB();saveReady=true;const s=await readStored();$('btn-resume').classList.toggle('hidden',!s);requestAnimationFrame(tick);showReleaseNotesIfNew();
  if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
  window.__FRAGUA_ALPHA2_DEBUG__={worldLayout:()=>({version:worldLayoutVersion,layer,seed,perLayer:Array.from({length:8},(_,i)=>worldLayoutVersion?worldLayout(i):null),dungeon:worldLayoutVersion?worldLayout(1).dungeon:null}),depthStats,spawnProps:(l)=>propsFor(l).filter(p=>['stairsdown','stairsup','elevator','dungeonentrance','ruin','supplycache'].includes(p.kind)).map(p=>({id:p.id,x:p.x,y:p.y,to:p.to,spawn:p.spawn})),newGame,dungeonProps:()=>dungeonProps().map(p=>({id:p.id,kind:p.kind,x:p.x,y:p.y})),getProgression:()=>({...progression,skills:{...progression.skills}}),xp:(n)=>addExperience(n,'prueba'),learnSkill:(id)=>allocateSkill(id),openSkills:()=>showModal('skills'),smeltInterval:()=>effectiveSmeltMs(),releaseVersion:()=>RELEASE_VERSION,releaseHistory:()=>RELEASE_HISTORY.map(v=>v.version),isReleasePopupOpen:()=>!$('release-popup').classList.contains('hidden'),openReleaseHistory:()=>showModal('updates'),forgeStatus:()=>({pick:player.pick,pickName:pickTierName(),weaponTier:player.weaponTier,station:forgeStationReady(),pickCost:ingotUpgradeCost('pick'),swordCost:ingotUpgradeCost('sword')}),forgeUpgrade:(kind)=>upgradeEquipment(kind,'forge'),journalHTML:()=>journalPanel(),remainsNearby:()=>currentProps().filter(p=>p.kind==='mine_remains').map(p=>({id:p.id,x:p.x,y:p.y,mode:p.mode,searched:p.searched})),inspectRemains:(id)=>{const p=currentProps().find(q=>q.id===id);if(!p)return false;interactWithRemains(p);return story39.remainsSearched.includes(id.slice(8));},drawBattle39:()=>drawBattleFrame39(performance.now()),getStory39:()=>({...story39}),getBoss39:()=>bossBattle?{hp:bossBattle.hp,energy:bossBattle.energy,turn:bossBattle.turn,phase:bossBattle.phase,intent:bossBattle.intent,entangled:bossBattle.entangled}:null,dungeonTile:(x,y)=>dungeonTile(x,y),startWidow:()=>{openStory39('widow');return true;},beginBattle:()=>{startWidowBattle();return true;},battleAction:battleAction39,battleItems:()=>Object.fromEntries(['vendaje','tonico','pocionprecision'].map(k=>[k,quantity(k)])),openDungeonChest:(kind)=>{const prop=dungeonProps().find(p=>p.loot===kind);if(prop)openDungeonChest(prop);},getCombat:()=>({stamina,dodgeTime,dodgeCooldown,invulnerable:playerInvuln,swordCooldown,charging:swordCharging}),dodge,beginSwordCharge,endSwordCharge,attackCharged:()=>swordAttack(true),getMobs:()=>localEnemies().map(e=>({...e})),getWebs:()=>[...webs.values()].map(w=>({...w})),addMob:(kind,x,y)=>{const id=`debug:${layer}:${x}:${y}`;const spec=MOB_SPECS[kind];if(!spec)return null;enemies.set(id,{id,kind,layer,x,y,hp:spec.hp,maxHp:spec.hp,hit:0,attack:0,webClock:2,windup:0,stagger:0,dx:0,dy:1});return id;},attackMob:(id,damage=3)=>{const m=enemies.get(id);if(m)hurtCreature(m,damage);return enemies.has(id);},addWeb:(x,y)=>{if(!canWebAt(x,y))return false;webs.set(webKey(x,y),{x,y,layer,hp:2,owner:'debug'});return true;},slashWeb:(x,y)=>strikeWeb(webAt(x,y),'sword'),spawnMobs:()=>creatureSpawnCheck(),dismantleStatus:()=>[...dismantleDamage],strikeBuilt:(x,y)=>{const p=structureAt(x,y);if(p){mineBuiltStructure(p);return structures.has(p.id);}if(floorAt(x,y)){mineBuiltFloor(x,y);return !!floorAt(x,y);}return null;},illuminated:(x,y)=>{refreshStaticLighting();return staticLights.get(Math.floor(x)+','+Math.floor(y))||0;},visible:(x,y)=>vis.has(Math.floor(x)+','+Math.floor(y)),lightCount:()=>{refreshStaticLighting();return lightSources.length;},getState:()=>({playing,paused,layer,seed,position:{x:player.x,y:player.y},gender:player.gender,pick:player.pick,stats:{...stats},ore:{...ores},chunks:chunkCache.size,modified:[...mined.entries()].length,inventory:inventory.map(it=>it?{...it}:null),structures:structures.size,blueprint:blueprint.size,floors:floorTiles.size,base:mainBase,hp,explored:[...fog.keys()].length,visited:[...visitedLevels]}),tile:(l,x,y)=>tileAt(x,y,l),seen:(l,x,y)=>fogAt(x,y,l),teleport:(l,x,y)=>{layer=l;player.x=x;player.y=y;screen.camX=x;screen.camY=y;selectedTile=null;reveal();updateHud()},setTile:(l,x,y,t)=>setTile(x,y,t,l),action:()=>doAction(false),grant:(id,n)=>{const rem=storeIn(inventory,id,n);refreshHotbar();return rem;},toScreen:(x,y)=>worldToScreen(x,y),getBlueprint:()=>[...blueprint.values()],snap:()=>snapshot(),load:(s)=>restore(s),draft:(id,a,b,mode)=>{let j=inventory.findIndex(it=>it?.id===id);if(j<0){storeIn(inventory,id,99);j=inventory.findIndex(it=>it?.id===id);}if(j<8)chooseSlot(j);else{[inventory[7],inventory[j]]=[inventory[j],inventory[7]];chooseSlot(7);}blueprintMode=mode||'line';addBlueprint(a,b);return draftSummary();},confirm:()=>confirmBlueprint(),cancel:()=>clearBlueprint(),undo:()=>undoBlueprint(),placeAt:(x,y,id)=>{if(id){let i=inventory.findIndex(it=>it?.id===id);if(i<0){storeIn(inventory,id,99);i=inventory.findIndex(it=>it?.id===id);}if(i>7){[inventory[7],inventory[i]]=[inventory[i],inventory[7]];i=7;}chooseSlot(i);}addBlueprint({x,y});return draftSummary();},select:(x,y)=>{selectedTile={x,y};updateContext()},go:(to)=>changeLevel({to,spawn:ENTRY}),save:()=>queueSave(),reload:readStored};
