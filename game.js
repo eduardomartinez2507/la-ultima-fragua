@@ -24,8 +24,12 @@ const UI={hudToggle:$('hud-toggle'),menu:$('menu'),hud:$('hud'),modal:$('modal')
 // Las novedades se almacenan fuera de la partida para no alterar su formato ni el progreso.
 // Para cada futuro deploy: actualizar RELEASE_VERSION, añadir la entrada nueva al inicio
 // de RELEASE_HISTORY, y cambiar los archivos cacheados en sw.js.
-const RELEASE_VERSION='3.9.4.7.1', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
+const RELEASE_VERSION='3.9.4.7.2', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
 const RELEASE_HISTORY=[
+ {version:'3.9.4.7.2',name:'Mejora visual de ruinas',date:'25/11/2026',changes:[
+  'Campamentos con brasero, zona de descanso y suelo gastado.',
+  'Ruinas con losas quebradas y torres con esquinas, umbral y un interior reconocible.'
+ ]},
  {version:'3.9.4.7.1',name:'Combate con pico',date:'25/11/2026',changes:[
   'Apunta a una criatura o tócala y pulsa Acción con el pico para golpearla.',
   'El pico sigue minando y demoliendo. La espada conserva sus ataques cargados y su ventaja en combate.'
@@ -214,10 +218,16 @@ function seededPoint(l,k,min,max){const angle=hashInt(l*19,k,705+k)*Math.PI*2,r=
 function offsetPoint(a,b){return{x:a.x+b.x-.5,y:a.y+b.y-.5};}
 const SITE_REFILL=90*60;
 const SITE_SHAPES={
- tower:[[-1,-1,'ruin'],[1,-1,'ruin'],[-2,0,'rubble'],[2,1,'rubble']],
- camp:[[-1,1,'site_embers'],[1,0,'crate'],[-2,-1,'site_trace'],[1,-1,'bones']]
+ tower:[[-2,-2,'site_corner'],[2,-2,'site_corner'],[-1,-2,'site_wall'],[0,-2,'site_wall'],[1,-2,'rubble'],
+  [-2,-1,'site_wall'],[2,-1,'site_wall'],[-2,0,'site_pillar'],[2,1,'site_wall'],[-2,2,'site_corner'],[2,2,'rubble']],
+ ruin:[[-2,-1,'site_wall'],[-1,-2,'site_pillar'],[0,-2,'rubble'],[1,-2,'site_wall'],[2,-1,'site_pillar'],
+  [-2,0,'rubble'],[2,0,'rubble'],[1,1,'bones'],[-1,2,'site_wall']],
+ camp:[[-1,0,'site_embers'],[1,0,'crate'],[1,1,'site_sack'],[-2,-1,'site_canvas'],
+  [-1,1,'site_bedroll'],[2,-1,'site_trace']]
 };
 const SITE_TRACES=['wagon','rail','bones','rubble','cocoon','coal'];
+function siteVisualType(site){return site.siteType==='camp'?'camp':site.level%2?'tower':'ruin';}
+const SITE_VISUAL_NAMES={camp:'Campamento abandonado',ruin:'Ruina antigua',tower:'Torre en ruinas'};
 const siteLayoutCache=new WeakMap();
 let activePlaySeconds=0,siteProgress=new Map(),openSite=null;
 const ruinsQA=location.protocol==='https:'&&/^desarrollo\.[a-z0-9-]+\.pages\.dev$/.test(location.hostname)
@@ -238,7 +248,7 @@ function qaPanel(){
  <div class="panel-actions"><button type="button" data-qa-act="backup">EXPORTAR RESPALDO</button></div>
  <p class="panel-text"><label><input type="checkbox" id="qa-backup-confirm" ${qaBackupPlayer!==player?'disabled':''} ${unlocked?'checked':''}> Confirmo que guardé el respaldo de esta partida</label></p>
  <p class="panel-text"><label>Estrato <select id="qa-layer">${Array.from({length:6},(_,i)=>`<option value="${i+1}" ${qaLayer===i+1?'selected':''}>${i+1}</option>`).join('')}</select></label></p>
- <p class="panel-text"><label>Lugar <select id="qa-site" ${site?'':'disabled'}>${qaSites().map(p=>`<option value="${p.id}" ${site.id===p.id?'selected':''}>${p.siteType==='tower'?'Ruina':'Campamento'}</option>`).join('')}</select></label></p>
+ <p class="panel-text"><label>Lugar <select id="qa-site" ${site?'':'disabled'}>${qaSites().map(p=>`<option value="${p.id}" ${site.id===p.id?'selected':''}>${SITE_VISUAL_NAMES[siteVisualType(p)]}</option>`).join('')}</select></label></p>
  ${site?`<dl class="panel-text"><dt>Identificador</dt><dd>${site.id}</dd><dt>Peligro</dt><dd>${danger[site.danger]}</dd>
  <dt>Descubierto</dt><dd>${state?'Sí':'No'}</dd><dt>Emboscada activada</dt><dd>${state?.ambushed?'Sí':'No'}</dd>
  <dt>Contenedor</dt><dd>${contents}</dd><dt>Reabastecimiento</dt><dd>${remaining===null?'Sin cuenta atrás':Math.floor(remaining/60)+' min '+remaining%60+' s'}</dd></dl>`:
@@ -317,7 +327,7 @@ function explorationSites(l){
   const compass=directionHint(point,hint);
   return {...point,id:`site:${seed}:${l}:${siteType}`,kind:'ruin',siteType,level:l,
    danger:roll<.30?'safe':roll<.75?'occupied':'ambush',
-   label:i?'Campamento minero abandonado':'Restos de una antigua torre',
+   label:SITE_VISUAL_NAMES[siteVisualType({siteType,level:l})],
    msg:i?'El mapa de los mineros marca un descenso hacia el '+compass+'.':
     l===1?'Las huellas de la expedición conducen hacia el '+compass+'.':'Las marcas de pico señalan un pozo antiguo hacia el '+compass+'.'};
  });
@@ -395,16 +405,18 @@ function investigateSite(site){
  state.searched=true;
  return state;
 }
+function nearbyVisibleSites(){
+ return explorationSites(layer).filter(site=>siteProgress.has(site.id)&&distance(player.x,player.y,site.x,site.y)<=11);
+}
 function nearbySiteScenery(props){
  const scenery=[];
- for(const site of explorationSites(layer)){
-  if(!siteProgress.has(site.id)||distance(player.x,player.y,site.x,site.y)>11)continue;
-  for(const [dx,dy,kind] of [...SITE_SHAPES[site.siteType],[0,-1,'site_clue']]){
+ for(const site of nearbyVisibleSites()){
+  for(const [dx,dy,kind] of [...SITE_SHAPES[siteVisualType(site)],[0,-1,'site_clue']]){
    const x=site.x+dx,y=site.y+dy;
    if(tileAt(x,y)!==T.FLOOR||!vis.has(Math.floor(x)+','+Math.floor(y))||structureAt(x,y)||
      props.some(p=>distance(p.x,p.y,x,y)<.85))continue;
    scenery.push(kind==='site_clue'?{x,y,kind,id:site.id+':clue',siteClue:site,label:'Restos de la expedición'}:
-    {x,y,kind:kind==='site_trace'?SITE_TRACES[layer-1]:kind,decorative:true,siteScenery:true});
+    {x,y,kind:kind==='site_trace'?SITE_TRACES[layer-1]:kind,decorative:true,siteScenery:true,vertical:Math.abs(dx)===2});
   }
  }
  return scenery;
@@ -2748,16 +2760,76 @@ for(const g of ['male','female'])for(const f of ['up','down','left','right'])for
 
 
 function pixRect(x,y,w,h,color){ctx.fillStyle=color;ctx.fillRect(Math.round(x),Math.round(y),Math.max(1,Math.round(w)),Math.max(1,Math.round(h)));}
+function drawSiteGround(type,dx,dy,x,y,t){
+ const paint=(a,b,w,h,color)=>pixRect(x+a*t,y+b*t,w*t,h*t,color);
+ if(type==='camp'){
+  if(Math.abs(dx)+Math.abs(dy)>3)return;
+  paint(.06,.14,.87,.72,'#76583a36');
+  if(dy===1&&dx>=-1&&dx<=1){
+   paint(.07,.54,.86,.14,'#63503f');paint(.12,.56,.72,.027,'#987859');
+   paint(.15,.73,.77,.10,'#554436');
+  }else{
+   paint(.24,.32,.06,.12,'#b58e6155');paint(.41,.47,.06,.12,'#b58e6155');
+  }
+  return;
+ }
+ if(type==='ruin'&&(Math.abs(dx)+Math.abs(dy)>3||(dx===2&&dy>=0)||(dx===-1&&dy===1)))return;
+ if(type==='tower'&&dy===2&&dx===0){
+  paint(.10,.03,.80,.58,'#5f5752');paint(.12,.05,.76,.09,'#91816c');return;
+ }
+ const tower=type==='tower',border=tower&&(Math.abs(dx)===2||dy===-2||dy===2);
+ paint(tower?.025:.09,tower?.025:.13,tower?.95:.81,tower?.95:.72,border?'#6b6054':tower?'#535864':'#66605a');
+ paint(.11,.13,.75,.065,border?'#ab935e':'#92897c');
+ paint(.12,.51,.73,.045,'#302d34');
+ paint(tower?.52:.66,.15,.045,.37,'#302d34');
+ if(!tower||(dx===1&&dy===-1)){
+  paint(.61,.50,.07,.17,'#302d34');paint(.68,.63,.15,.049,'#302d34');
+ }
+}
+function drawSiteDecoration(p,x,y,s){
+ const box=(a,b,w,h,c)=>pixRect(x+a*s,y+b*s,w*s,h*s,c);
+ switch(p.kind){
+  case 'site_wall': {
+   const w=p.vertical?.55:1.08,left=-w/2;
+   box(left,-.30,w,.61,'#423e44');box(left,-.48,w,.22,'#85808a');
+   box(left+.06,-.42,w-.12,.07,'#b2a691');
+   box(left+.02,-.11,w-.04,.07,'#68616c');box(left+.25,-.27,.07,.17,'#282730');
+   return true;
+  }
+  case 'site_corner':
+  case 'site_pillar':
+   box(-.43,.04,.86,.31,'#413841');box(-.32,-.63,.64,.79,'#68646f');
+   box(-.24,-.69,.48,.13,'#ad9c8c');box(-.24,-.46,.10,.49,'#8c8290');
+   box(-.29,-.13,.52,.06,'#443c47');return true;
+  case 'site_canvas':
+   box(-.48,-.37,.95,.68,'#39383a');box(-.40,-.48,.76,.51,'#a2845b');
+   box(-.33,-.48,.66,.12,'#c4a77a');box(-.45,-.34,.08,.63,'#70523c');
+   box(-.21,-.18,.49,.36,'#675444');return true;
+  case 'site_bedroll':
+   box(-.27,-.40,.55,.75,'#4b3632');box(-.21,-.33,.43,.62,'#975b46');
+   box(-.22,-.31,.43,.17,'#cfb184');box(-.20,.14,.40,.06,'#c78d65');return true;
+  case 'site_sack':
+   box(-.31,-.24,.61,.54,'#705438');box(-.23,-.30,.45,.44,'#ad8b58');
+   box(-.12,-.35,.24,.07,'#d6b279');return true;
+  case 'site_embers':
+   box(-.46,-.25,.92,.55,'#554b4a');box(-.35,-.32,.70,.10,'#8f8171');
+   box(-.32,-.20,.64,.39,'#30272a');box(-.21,-.10,.48,.08,'#835139');
+   box(-.11,.02,.24,.085,'#cb784d');box(.16,-.11,.09,.07,'#d2935f');return true;
+ }
+ return false;
+}
 function drawProp(p,t){let a=worldToScreen(p.x,p.y),s=t*.84,x=Math.round(a.x),y=Math.round(a.y);const dark='#2b272d';
  if(p.siteType){
   if(!vis.has(Math.floor(p.x)+','+Math.floor(p.y))||structureAt(p.x,p.y))return;
+  const type=siteVisualType(p);
+  if(type!=='camp'){
+   pixRect(x-s*.57,y-s*.03,s*1.14,s*.42,type==='tower'?'#777071':'#625958');
+   pixRect(x-s*.54,y+s*.25,s*1.08,s*.09,'#aa8d6c');
+  }
   drawProp(p.siteType==='tower'?{...p,siteType:null,kind:'dungeonchest'}:{...p,siteType:null,kind:'crate',decorative:true},t);return;
  }
  if(p.siteClue){drawProp({...p,siteClue:null,kind:'dungeonrecord'},t);return;}
- if(p.kind==='site_embers'){
-  pixRect(x-s*.34,y-s*.14,s*.68,s*.28,'#50474b');pixRect(x-s*.22,y-s*.08,s*.44,s*.16,'#2b252b');
-  pixRect(x-s*.14,y-s*.05,s*.28,s*.08,LEVELS[layer].accent);return;
- }
+ if(p.siteScenery&&drawSiteDecoration(p,x,y,s))return;
  if(p.kind==='mine_remains'){
   const img=REMAINS_IMAGES.get(p.sprite);
   ctx.fillStyle='rgba(2,4,9,.38)';ctx.beginPath();ctx.ellipse(x,y+s*.32,s*.41,s*.15,0,0,2*Math.PI);ctx.fill();
@@ -3263,8 +3335,20 @@ function drawHandReticle(t,props){
 }
 function render(t){const w=screen.w,h=screen.h;ctx.setTransform(canvas.width/w,0,0,canvas.height/h,0,0);ctx.imageSmoothingEnabled=false;ctx.fillStyle='#101824';ctx.fillRect(0,0,w,h);
  const x0=Math.floor(screen.camX-w/(2*t))-1,x1=Math.ceil(screen.camX+w/(2*t))+1,y0=Math.floor(screen.camY-h/(2*t))-1,y1=Math.ceil(screen.camY+h/(2*t))+1,entities=[];
+ const siteGround=new Map();
+ for(const site of nearbyVisibleSites()){
+  const sx=Math.floor(site.x),sy=Math.floor(site.y),type=siteVisualType(site);
+  for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+   const key=(sx+dx)+','+(sy+dy);
+   if(vis.has(key))siteGround.set(key,{type,dx,dy});
+  }
+ }
  for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
- const a=worldToScreen(x,y),kind=tileAt(x,y);if(kind===T.FLOOR){drawGround(x,y,Math.floor(a.x),Math.floor(a.y),t);drawBackgroundWall(x,y,Math.floor(a.x),Math.floor(a.y),t);drawBuiltFloor(x,y,Math.floor(a.x),Math.floor(a.y),t);}
+ const a=worldToScreen(x,y),kind=tileAt(x,y);if(kind===T.FLOOR){
+  const sx=Math.floor(a.x),sy=Math.floor(a.y),site=siteGround.size?siteGround.get(x+','+y):null;
+  drawGround(x,y,sx,sy,t);if(site)drawSiteGround(site.type,site.dx,site.dy,sx,sy,t);
+  drawBackgroundWall(x,y,sx,sy,t);drawBuiltFloor(x,y,sx,sy,t);
+ }
  else{ctx.fillStyle='#192430';ctx.fillRect(Math.floor(a.x),Math.floor(a.y),t+1,t+1);entities.push({kind:'wall',y:y+.92,x,yy:y,a,type:kind});}}
  for(const web of webs.values())if(web.layer===layer&&web.x>=x0-1&&web.x<=x1+1&&web.y>=y0-1&&web.y<=y1+1&&vis.has(web.x+','+web.y))drawWeb(web,t);
  const mobs=localEnemies();
