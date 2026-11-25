@@ -233,18 +233,31 @@ let activePlaySeconds=0,siteProgress=new Map(),openSite=null;
 const ruinsQA=location.protocol==='https:'&&/^desarrollo\.[a-z0-9-]+\.pages\.dev$/.test(location.hostname)
  &&new URLSearchParams(location.search).get('qa')==='ruinas';
 let qaLayer=1,qaSiteId='',qaBackupPlayer=null,qaBackupConfirmed=false,qaMessage='';
+const QA_DESTINATION_GROUPS={
+ sites:'Ruinas y campamentos',entrances:'Entradas de mazmorras',
+ miniboss:'Cámaras de minibosses',boss:'Cámaras de bosses',checkpoints:'Puntos de control'
+};
+let qaDestinationGroup='sites';
 function qaSites(){return explorationSites(qaLayer);}
 function qaSelectedSite(){
  const sites=qaSites();
  return sites.find(site=>site.id===qaSiteId)||sites[0];
 }
 function qaPanel(){
+ const groups=`<p class="panel-text"><label>Destinos <select id="qa-group">${Object.entries(QA_DESTINATION_GROUPS).map(([id,label])=>
+  `<option value="${id}" ${qaDestinationGroup===id?'selected':''}>${label}</option>`).join('')}</select></label></p>`;
+ if(qaDestinationGroup!=='sites'){
+  const encounters=ENCOUNTER_CATALOG.filter(entry=>entry.rank===qaDestinationGroup);
+  const list=encounters.map(entry=>`<li>Estrato ${entry.layer} · ${entry.name} · ${entry.status==='implemented'?'Implementado, llegada QA sin validar':'Pendiente'}</li>`).join('');
+  return `${groups}<p class="panel-text">Aún no hay llegadas QA verificadas para esta categoría.</p>
+   ${list?`<ul class="panel-text">${list}</ul>`:''}<div class="panel-actions"><button type="button" data-a="resume">VOLVER</button></div>`;
+ }
  const site=qaSelectedSite(),state=siteProgress.get(site?.id);
  const unlocked=qaBackupPlayer===player&&qaBackupConfirmed;
  const remaining=state?.refillAt==null?null:Math.max(0,Math.ceil(state.refillAt-activePlaySeconds));
  const contents=state?.items===null||!state?'Sin generar':state.items.map(it=>ITEMS[it.id].name+' ×'+it.n+(it.unique?' (único)':'')).join(', ')||'Vacío';
  const danger={safe:'Seguro',occupied:'Ocupado',ambush:'Emboscada'};
- return `<p class="panel-text">Usa una partida de prueba. Los cambios de QA pueden guardarse automáticamente.</p>
+ return `${groups}<p class="panel-text">Usa una partida de prueba. Los cambios de QA pueden guardarse automáticamente.</p>
  <div class="panel-actions"><button type="button" data-qa-act="backup">EXPORTAR RESPALDO</button></div>
  <p class="panel-text"><label><input type="checkbox" id="qa-backup-confirm" ${qaBackupPlayer!==player?'disabled':''} ${unlocked?'checked':''}> Confirmo que guardé el respaldo de esta partida</label></p>
  <p class="panel-text"><label>Estrato <select id="qa-layer">${Array.from({length:6},(_,i)=>`<option value="${i+1}" ${qaLayer===i+1?'selected':''}>${i+1}</option>`).join('')}</select></label></p>
@@ -275,7 +288,7 @@ function qaLanding(site){
  return null;
 }
 function handleQA(action){
- if(!ruinsQA||modalType!=='qa')return;
+ if(!ruinsQA||modalType!=='qa'||qaDestinationGroup!=='sites')return;
  qaMessage='';
  if(action==='backup'){
   exportGame();qaBackupPlayer=player;qaBackupConfirmed=false;
@@ -296,7 +309,7 @@ function handleQA(action){
     if(spawn){
      closeModal();
      player.dirX=site.x-spawn.x;player.dirY=site.y-spawn.y;
-     changeLevel({to:site.level,spawn});return;
+     changeLevel({to:site.level,spawn},{initializeDungeon:false});return;
     }
     qaMessage='No se encontró una casilla cercana libre de obstáculos y enemigos.';
    }
@@ -312,6 +325,11 @@ function handleQA(action){
  showModal('qa');
 }
 function hookQA(body){
+ body.querySelector('#qa-group').addEventListener('change',e=>{
+  if(!Object.hasOwn(QA_DESTINATION_GROUPS,e.target.value))return;
+  qaDestinationGroup=e.target.value;qaMessage='';showModal('qa');
+ });
+ if(qaDestinationGroup!=='sites')return;
  body.querySelector('#qa-layer').addEventListener('change',e=>{qaLayer=Number(e.target.value);qaSiteId='';qaMessage='';showModal('qa');});
  body.querySelector('#qa-site').addEventListener('change',e=>{qaSiteId=e.target.value;qaMessage='';showModal('qa');});
  body.querySelector('#qa-backup-confirm').addEventListener('change',e=>{qaBackupConfirmed=e.target.checked&&qaBackupPlayer===player;showModal('qa');});
@@ -2494,8 +2512,8 @@ function mineWall(a){let diff=HARD[a.type],power=Math.max(1,player.pick||1)+prog
  else if(stats.mined===1||stats.mined%17===0)toast('+'+1+' '+ore+' · '+stats.mined+' bloques excavados',1200,'common');
  if(navigator.vibrate)try{navigator.vibrate(8);}catch{}scheduleSave();
 }
-function changeLevel(p){clearAimSelection();selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();clearBlueprint();if(!Number.isInteger(p.to)||p.to<0||p.to>=LAYERS)return;
- layer=p.to;if(layer===1){seedDungeon();if(!worldLayoutVersion)learnLore('entrance');}invalidateLights();player.x=p.spawn.x;player.y=p.spawn.y;screen.camX=player.x;screen.camY=player.y;selectedTile=null;breakDamage.clear();vis=new Set();visitedLevels.add(layer);stats.transitions++;reveal();updateHud();queueSave();toast('✦ Nivel '+layer+' · '+LEVELS[layer].name,2700);checkDanger(layer);
+function changeLevel(p,{initializeDungeon=true}={}){clearAimSelection();selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();clearBlueprint();if(!Number.isInteger(p.to)||p.to<0||p.to>=LAYERS)return;
+ layer=p.to;if(layer===1&&initializeDungeon){seedDungeon();if(!worldLayoutVersion)learnLore('entrance');}invalidateLights();player.x=p.spawn.x;player.y=p.spawn.y;screen.camX=player.x;screen.camY=player.y;selectedTile=null;breakDamage.clear();vis=new Set();visitedLevels.add(layer);stats.transitions++;reveal();updateHud();queueSave();toast('✦ Nivel '+layer+' · '+LEVELS[layer].name,2700);checkDanger(layer);
 }
 function doAction(silent=false){
  if(!playing||paused)return;
@@ -2590,9 +2608,9 @@ let mapView={x:0,y:0,zoom:3.6};
 function showModal(type){if(!playing||(type==='qa'&&!ruinsQA))return;clearAimSelection();const previousModalType=modalType;paused=true;resetJoy();actionHeld=false;cancelSwordCharge();dodgeTime=0;resetMiningFocus();UI.actionBtn.classList.remove('pressed');modalType=type;UI.modal.classList.remove('hidden');const title=$('modal-title'),body=$('modal-body');
  if(type==='pause'){
   title.textContent='Expedición en pausa';body.innerHTML=`<p class="panel-text"><b>${player.gender==='female'?'Enana minera':'Enano minero'}</b> · Nivel ${layer}: <b>${escapeHTML(LEVELS[layer].name)}</b>. Tus minas son un mundo procedural persistente; la partida de la 1.6 sigue independiente.</p><div class="panel-grid"><div class="info-tile"><strong>${stats.placed||0} construcciones</strong><span>Bloques, muebles y refugios</span></div><div class="info-tile"><strong>${stats.crafted||0} fabricados</strong><span>Objetos hechos en esta partida</span></div><div class="info-tile"><strong>${stats.mined} bloques</strong><span>Minerales y roca picados</span></div><div class="info-tile"><strong>${stats.kills||0} criaturas</strong><span>Enemigos derrotados</span></div><div class="info-tile"><strong>${stats.explored} casillas</strong><span>Mapa revelado</span></div><div class="info-tile"><strong>${visitedLevels.size} / 8 niveles</strong><span>Profundidades visitadas</span></div><div class="info-tile"><strong>Personaje nivel ${progression.level}</strong><span>${progression.points} puntos de habilidad · ${progression.xp} XP</span></div><div class="info-tile"><strong>Pico nivel ${player.pick}</strong><span>Dominio minero provisional</span></div></div><div class="panel-actions"><button class="primary" data-a="resume">▶ CONTINUAR</button><button data-a="save">▣ GUARDAR</button><button data-a="export">⇩ RESPALDO</button><button data-a="import">⇧ IMPORTAR</button><button data-a="craft">⚒ RECETAS</button><button data-a="journal">▤ DIARIO</button><button data-a="updates">✧ NOVEDADES</button><button data-a="skills">✧ HABILIDADES</button><button data-a="help">? GUÍA</button><button data-a="new">↻ NUEVO MUNDO</button></div>`;
-  if(ruinsQA)body.querySelector('.panel-actions').insertAdjacentHTML('afterbegin','<button type="button" data-a="qa">QA · RUINAS</button>');
+  if(ruinsQA)body.querySelector('.panel-actions').insertAdjacentHTML('afterbegin','<button type="button" data-a="qa">QA · EXPLORACIÓN</button>');
  }else if(type==='qa'){
-  title.textContent='QA · Ruinas y campamentos';body.innerHTML=qaPanel();hookQA(body);
+  title.textContent='QA · Exploración';body.innerHTML=qaPanel();hookQA(body);
  }else if(type==='updates'){
   title.textContent='Novedades · Historial';body.innerHTML=releaseHistoryMarkup();
  }else if(type==='map'){

@@ -1,0 +1,68 @@
+LA ÚLTIMA FRAGUA 2.0 — DISEÑO DE ENCUENTROS
+
+CATÁLOGO Y LÍMITE DE ESTA ENTREGA
+encounters.js contiene los 16 registros y las tres plantillas de cámara.
+Los niveles, patrones y recompensas pendientes son propuestas de diseño.
+Un registro pendiente no crea un enemigo, una recompensa ni una cámara.
+La Viuda de Carbón sigue activa con sus tres fases, sellos, botín y guardado
+actuales. La pauta de dos fases se aplica solo a los minibosses nuevos.
+
+ARQUITECTURA PROPUESTA
+El catálogo es descriptivo. Un futuro registro de implementaciones asociará
+cada ID con un controlador de combate y un proveedor de ubicación verificada.
+Separar los comandos del combate, la presentación y la persistencia del
+encuentro. Usar acciones por turnos, defensa, energía, consumibles y señales
+previas a golpes especiales. Los patrones y umbrales pertenecerán al
+controlador correspondiente. Incorporar la Viuda mediante un adaptador de
+lectura cuando haga falta una vista común. Sus funciones siguen siendo la
+fuente de verdad y no se migran en esta fase.
+
+PLANTILLAS Y UBICACIONES
+Las especificaciones del catálogo recogen entrada, perímetro, centro, luz
+y acentos de cada categoría. Las dimensiones son rangos de diseño, no
+coordenadas. La validación futura debe comprobar la llegada, el camino
+hasta el centro, la salida y el acceso al punto de control.
+
+Por campaña, derivar candidatos de semilla, estrato, ID estable de
+encuentro y versión de colocación. Validar toda la huella de arena y ruta
+contra estructuras, pisos, bloques colocados, excavaciones guardadas,
+planes, puntos de aparición, escaleras, ascensores, ruinas y mazmorras.
+Guardar el anclaje una sola vez tras aprobarlo para que no cambie por
+orden de visita ni por ediciones posteriores. Si no queda un candidato
+válido, mantener el encuentro sin ubicar. Para mundos anteriores,
+considerar primero una instancia separada accesible desde un punto seguro
+optativo. No regenerar el terreno ni mover accesos existentes.
+
+PERSISTENCIA PROPUESTA — SIN ESCRITURAS EN ESTA FASE
+Mantener version:4 y las claves de IndexedDB. Usar un bloque opcional
+encounters con schema:1, byId y checkpoints. Cada byId[id] podrá incluir
+discovered, defeated, rewardClaimed, fragmentIds y placement opcional.
+checkpoints podrá registrar IDs de puntos aprobados y su estado activado.
+Los campos ausentes equivalen a valores iniciales. Validar IDs y tipos al
+cargar. Un registro incompatible se conserva o se ignora sin restablecer
+el mundo. La persistencia de recompensas debe guardar inventario y marca
+de reclamación juntos, y soportar recargas o reintentos.
+
+La Viuda se lee desde los sellos, widowDefeated, checkpoint, pistas,
+cofres y estado de combate ya existentes. No escribir un segundo registro
+para ella ni inferir la reclamación del botín a partir de haber ganado.
+
+QA Y SIGUIENTES ETAPAS
+1. Catálogo, plantilla de cámara y grupos del panel QA. Los traslados
+   activos siguen limitados a ruinas y campamentos comprobados. La Viuda
+   figura como implementada, pero su cámara no es un destino QA aprobado.
+2. Probar una cámara de miniboss en una campaña de prueba. Añadir una
+   llegada segura separada del disparador del encuentro y de cualquier
+   punto que otorgue progreso. Habilitar el grupo QA solo tras verificarlo.
+3. Introducir persistencia para el primer encuentro nuevo y probar pausa,
+   muerte, importación, partida en curso y reclamación única con mochila
+   llena. Medir el combate frente al equipamiento y nivel de ese estrato.
+4. Ampliar con una cámara principal y sus tres fases. Después incorporar
+   el resto por estrato y reservar la cámara final para el cierre narrativo.
+
+RIESGOS A CONTROLAR
+Solapes entre la huella de la cámara y cambios del jugador, caminos
+inaccesibles por terreno heredado, botín duplicado tras recargas y un
+traslado QA que active un sello, una escena o un punto de control.
+Verificar también la caché PWA al introducir archivos nuevos y la
+legibilidad del escenario en pantallas táctiles pequeñas.
