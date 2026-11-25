@@ -24,8 +24,12 @@ const UI={hudToggle:$('hud-toggle'),menu:$('menu'),hud:$('hud'),modal:$('modal')
 // Las novedades se almacenan fuera de la partida para no alterar su formato ni el progreso.
 // Para cada futuro deploy: actualizar RELEASE_VERSION, añadir la entrada nueva al inicio
 // de RELEASE_HISTORY, y cambiar los archivos cacheados en sw.js.
-const RELEASE_VERSION='3.9.4.7', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
+const RELEASE_VERSION='3.9.4.7.1', RELEASE_SEEN_KEY='fragua-2-ultimo-deploy-leido';
 const RELEASE_HISTORY=[
+ {version:'3.9.4.7.1',name:'Combate con pico',date:'25/11/2026',changes:[
+  'Apunta a una criatura o tócala y pulsa Acción con el pico para golpearla.',
+  'El pico sigue minando y demoliendo. La espada conserva sus ataques cargados y su ventaja en combate.'
+ ]},
  {version:'3.9.4.7',name:'Ruinas y campamentos explorables',date:'25/11/2026',changes:[
   'Investiga las ruinas y campamentos, recoge suministros con Mano y descubre las pistas de expediciones anteriores.',
   'Algunos lugares tienen criaturas o emboscadas. Los suministros comunes regresan tras 90 minutos de exploración activa.'
@@ -478,6 +482,8 @@ function directionHint(a,b){const x=b.x-a.x,y=b.y-a.y;const e=x>12?'este':x< -12
 function checkDanger(l){if(l<2)return;const recommended=[1,1,3,5,7,10,12,15][l];
  if(progression.level<recommended){toast('⚠ Estrato '+l+': peligro extremo. Nivel de personaje recomendado '+recommended+'.',3150,'warning');}}
 let creatureClock=0,spawnClock=0,swordCooldown=0,playerInvuln=0,battleFlash=null;
+const PICK_ATTACK_REACH=1.55,PICK_ATTACK_DELAY=.65;
+let pickCooldown=0,pickEnemySelection=null;
 // Alpha 3.8 — combate: acción cargada, esquiva, fatiga y señales de ataque.
 const MAX_STAMINA=100,DODGE_COST=30,CHARGE_COST=28;
 let stamina=MAX_STAMINA,staminaDelay=0,dodgeCooldown=0,dodgeTime=0,dodgeX=0,dodgeY=0;
@@ -1961,7 +1967,7 @@ function repairTarget(){
  const b=directionalBuilt();if(b)return b;
  const p=nearestProp();if(p)return{kind:'prop',p};return directionalWall();
 }
-function clearAimSelection(){handSelection=null;miningSelection=null;}
+function clearAimSelection(){handSelection=null;miningSelection=null;pickEnemySelection=null;}
 function miningCandidateAt({x,y},props,preferFloor=false){
  if(!inWorld(x,y))return null;
  const floor=floorAt(x,y);
@@ -1984,7 +1990,7 @@ function miningTargetInReach(a,tapped){
  const x=a.p?.x??a.x+.5,y=a.p?.y??a.y+.5;
  return distance(player.x,player.y,x,y)<reach&&targetPathClear(x,y);
 }
-function miningTarget(props){
+function miningTarget(props,tappedOnly=false){
  if(miningSelection){
   const {target,tool,level,preferFloor}=miningSelection;
   if(layer===level&&pickedItem()===tool){
@@ -1993,8 +1999,35 @@ function miningTarget(props){
   }
   miningSelection=null;
  }
+ if(tappedOnly)return null;
  const a=miningCandidateAt(reticleCell(),props);
  return miningTargetInReach(a,false)?a:null;
+}
+function pickCreatureAt(point,mobs=localEnemies()){
+ if(blocksTargetPath(point.x,point.y))return null;
+ let best=null,score=Infinity;
+ for(const e of mobs){
+  if(!vis.has(Math.floor(e.x)+','+Math.floor(e.y)))continue;
+  const dx=point.x-e.x,dy=point.y-e.y;
+  if(Math.abs(dx)>(e.kind==='bat'?.44:.34)||dy<-.46||dy>.25)continue;
+  const d=Math.hypot(dx,dy+.12);
+  if(d<score){best=e;score=d;}
+ }
+ return best;
+}
+function pickEnemyReachable(e){
+ const x=e.x-player.x,y=e.y-player.y;
+ return e.layer===layer&&e.hp>0&&Math.hypot(x,y)<=PICK_ATTACK_REACH&&
+  x*player.dirX+y*player.dirY>0&&vis.has(Math.floor(e.x)+','+Math.floor(e.y))&&
+  !blocksTargetPath(e.x,e.y)&&targetPathClear(e.x,e.y);
+}
+function pickActionTarget(props,mobs){
+ const selected=pickEnemySelection&&enemies.get(pickEnemySelection);
+ if(selected)return{kind:'creature',enemy:selected,reachable:pickEnemyReachable(selected)};
+ const tapped=miningTarget(props,true);
+ if(tapped)return tapped;
+ const point=reticlePoint(),enemy=pickCreatureAt(screenToWorld(point.x,point.y),mobs);
+ return enemy?{kind:'creature',enemy,reachable:pickEnemyReachable(enemy)}:miningTarget(props);
 }
 // La celda objetivo es maciza por definición. No debe bloquear su propio golpe
 // al apuntar en diagonal; sí bloquean todas las paredes que están antes.
@@ -2153,6 +2186,14 @@ function hurtCreature(e,damage){
  if(e.hp<=0)killCreature(e);
  else scheduleSave();
 }
+function attackWithPick(target){
+ if(!target.reachable||pickCooldown>0)return;
+ pickCooldown=PICK_ATTACK_DELAY;
+ const tier=clamp(player.pick||1,1,PICK_METAL_NAMES.length);
+ const damage=Math.round((tier+1)*(1+progression.skills.combat*.10));
+ hurtCreature(target.enemy,damage);
+ battleFlash.pick=true;
+}
 function swordAttack(charged=false){
  if(swordCooldown>0)return false;
  if(charged){if(stamina<CHARGE_COST)charged=false;else{stamina-=CHARGE_COST;staminaDelay=.80;}}
@@ -2191,6 +2232,7 @@ function swordAttack(charged=false){
 }
 function updateCreatures(dt){
  swordCooldown=Math.max(0,swordCooldown-dt);
+ pickCooldown=Math.max(0,pickCooldown-dt);
  playerInvuln=Math.max(0,playerInvuln-dt);
  spawnClock+=dt;if(spawnClock>=1.5){spawnClock=0;creatureSpawnCheck();}
  for(const e of localEnemies()){
@@ -2280,7 +2322,7 @@ function drawCreature(e,t){
   const bw=s*.80,bh=Math.max(3,s*.075);pixRect(x-bw/2,y-s*.72,bw,bh,'#1c2026');
   pixRect(x-bw/2,y-s*.72,bw*clamp(e.hp/e.maxHp,0,1),bh,'#dc7b68');
  }
- if(e.id===selectedEnemy){ctx.strokeStyle='#f4cc81';ctx.lineWidth=2;ctx.strokeRect(Math.round(x-s*.47),Math.round(y-s*.56),Math.round(s*.94),Math.round(s*.80));}
+ if(e.id===selectedEnemy&&pickedItem()?.id!=='pick'){ctx.strokeStyle='#f4cc81';ctx.lineWidth=2;ctx.strokeRect(Math.round(x-s*.47),Math.round(y-s*.56),Math.round(s*.94),Math.round(s*.80));}
 }
 const releasePopup=$('release-popup');
 function canAim(){
@@ -2395,7 +2437,11 @@ function updateContext(pickTarget){
   setActionVisual(itemArt('martillo','action-art'),'REPARAR',true,!!repair,'🔨',label);return;
  }
  if(it?.id==='pick'){
-  const a=pickTarget===undefined?miningTarget():pickTarget;
+  const a=pickTarget===undefined?pickActionTarget():pickTarget;
+  if(a?.kind==='creature'){
+   const e=a.enemy,label=a.reachable?MOB_NAMES[e.kind]+' · '+Math.ceil(e.hp)+' PV':'Objetivo fuera de alcance';
+   setActionVisual(itemArt('pick','action-art'),'GOLPEAR',a.reachable,true,'⚒',label);return;
+  }
   if(a?.kind==='web'){setActionVisual(itemArt('pick','action-art'),'CORTAR',true,true,'≋','Telaraña · hilo recuperable');return;}
   if(a?.kind==='floor'){
    const id=floorAt(a.x,a.y),kind=id==='stonefloor'?'stonewall':'woodwall';
@@ -2455,7 +2501,8 @@ function doAction(silent=false){
  if(it?.id==='martillo'){if(!silent)repairWithHammer(repairTarget());return;}
  if(it?.id!=='pick'){if(!silent)toast('Selecciona una herramienta o un objeto para construir.',1400,'warning');return;}
  if(!canAim())return;
- const a=miningTarget();
+ const a=pickActionTarget();
+ if(a?.kind==='creature'){attackWithPick(a);return;}
  if(a?.kind==='web'){strikeWeb(a.web,'pick');return;}
  if(a?.kind==='floor'){mineBuiltFloor(a.x,a.y);return;}
  if(a?.kind==='prop'){
@@ -2480,7 +2527,7 @@ async function writeStored(data){if(db){try{await new Promise((resolve,reject)=>
  try{localStorage.setItem(SAVE_KEY,JSON.stringify(data));return true;}catch(e){console.warn('No save space',e);return false;}}
 let delayedSave=null;function scheduleSave(){clearTimeout(delayedSave);delayedSave=setTimeout(()=>queueSave(),1200);}
 function queueSave(silent=true){if(!playing)return Promise.resolve(false);const data=snapshot();saveChain=saveChain.then(()=>writeStored(data)).then(ok=>{if(!ok&&!silent)toast('No fue posible guardar: revisa el espacio del navegador.',2900,'warning');else if(!silent)toast('Expedición guardada en este dispositivo.');return ok;});return saveChain;}
-function restore(s){clearAimSelection();story39={...freshStory39(),...(s.story39&&typeof s.story39==='object'?s.story39:{prologueSeen:true})};story39.seals=Array.isArray(story39.seals)?story39.seals.filter(x=>DUNGEON_SEALS.includes(x)):[];if(story39.widowDefeated)story39.seals=[...DUNGEON_SEALS];story39.clues=Array.isArray(story39.clues)?story39.clues.filter(x=>STORY_FRAGMENTS[x]).slice(0,20):[];story39.openedChests=Array.isArray(story39.openedChests)?story39.openedChests.filter(x=>typeof x==='string').slice(0,30):[];story39.remainsSearched=Array.isArray(story39.remainsSearched)?[...new Set(story39.remainsSearched.filter(x=>typeof x==='string'))].slice(0,3000):[];remainsChunkCache.clear();pendingBattle39=s.boss39&&!story39.widowDefeated?s.boss39:null;bossBattle=null;stamina=clamp(Number.isFinite(s.stamina)?s.stamina:100,0,100);staminaDelay=0;dodgeTime=0;dodgeCooldown=0;swordCharging=false;attackFX=null;enemies=new Map();defeatedEnemies=new Set(Array.isArray(s.defeatedEnemies)?s.defeatedEnemies.filter(x=>typeof x==='string').slice(0,15000):[]);webs=new Map();selectedEnemy=null;
+function restore(s){clearAimSelection();pickCooldown=0;battleFlash=null;story39={...freshStory39(),...(s.story39&&typeof s.story39==='object'?s.story39:{prologueSeen:true})};story39.seals=Array.isArray(story39.seals)?story39.seals.filter(x=>DUNGEON_SEALS.includes(x)):[];if(story39.widowDefeated)story39.seals=[...DUNGEON_SEALS];story39.clues=Array.isArray(story39.clues)?story39.clues.filter(x=>STORY_FRAGMENTS[x]).slice(0,20):[];story39.openedChests=Array.isArray(story39.openedChests)?story39.openedChests.filter(x=>typeof x==='string').slice(0,30):[];story39.remainsSearched=Array.isArray(story39.remainsSearched)?[...new Set(story39.remainsSearched.filter(x=>typeof x==='string'))].slice(0,3000):[];remainsChunkCache.clear();pendingBattle39=s.boss39&&!story39.widowDefeated?s.boss39:null;bossBattle=null;stamina=clamp(Number.isFinite(s.stamina)?s.stamina:100,0,100);staminaDelay=0;dodgeTime=0;dodgeCooldown=0;swordCharging=false;attackFX=null;enemies=new Map();defeatedEnemies=new Set(Array.isArray(s.defeatedEnemies)?s.defeatedEnemies.filter(x=>typeof x==='string').slice(0,15000):[]);webs=new Map();selectedEnemy=null;
  for(const e of Array.isArray(s.enemies)?s.enemies.slice(0,800):[]){if(e&&typeof e.id==='string'&&!!MOB_SPECS[e.kind]&&Number.isInteger(e.layer)&&e.layer>=0&&e.layer<LAYERS&&Number.isFinite(e.x)&&Number.isFinite(e.y)&&Number.isFinite(e.hp)&&e.hp>0&&inWorld(e.x,e.y))enemies.set(e.id,{id:e.id,kind:e.kind,layer:e.layer,x:e.x,y:e.y,hp:e.hp,maxHp:e.maxHp||MOB_SPECS[e.kind].hp,hit:0,attack:0,webClock:3,windup:0,stagger:0,dx:0,dy:1,elite:!!e.elite,poison:clamp(Number(e.poison)||0,0,3),poisonTick:clamp(Number(e.poisonTick)||1,.01,2)});}
  for(const entry of Array.isArray(s.webs)?s.webs.slice(0,2000):[]){const [k,w]=entry||[];if(typeof k==='string'&&w&&Number.isInteger(w.layer)&&w.layer>=0&&w.layer<LAYERS&&inWorld(w.x,w.y))webs.set(k,{x:w.x,y:w.y,layer:w.layer,hp:Math.max(1,Math.min(2,w.hp||2)),owner:String(w.owner||'')});}
  dismantleDamage.clear();breakDamage.clear();dismantleFX=null;resetMiningFocus();invalidateLights();blueprint.clear();blueprintHistory=[];ghostCells=[];seed=s.seed>>>0;worldLayoutVersion=s.worldLayoutVersion===1?1:0;layoutCache.clear();layer=s.layer;restoreExploration(s.explorationSites);player={x:s.position.x,y:s.position.y,gender:s.gender==='female'?'female':'male',dirX:0,dirY:1,face:'down',walk:0,steps:+s.steps||0,pick:clamp(+s.pick||1,1,5),weaponTier:clamp(+s.weaponTier||0,0,3),armorTier:clamp(+s.armorTier||0,0,3)};
@@ -2521,7 +2568,7 @@ function restore(s){clearAimSelection();story39={...freshStory39(),...(s.story39
  else{startingInventory();for(const [id,n] of Object.entries(ores))if(ITEMS[id]&&n>0){let remaining=storeIn(inventory,id,n);if(remaining)dropAt(id,remaining,.5,.5,0);}}
  if(!s.starterGelGranted){const rest=storeIn(inventory,'gel',4);if(rest)dropAt('gel',rest,player.x,player.y,layer);starterGelGranted=true;}else starterGelGranted=true;
  refreshHotbar();updateBlueprintUI();chunkCache.clear();selectedTile=null;if(!canMove(player.x,player.y)){if(layer===1&&inDungeon(player.x,player.y)){({x:player.x,y:player.y}=dungeonPoint(26.5,.5));}else{player.x=START.x;player.y=START.y;}}screen.camX=player.x;screen.camY=player.y;}
-function newGame(){activePlaySeconds=0;siteProgress.clear();openSite=null;progression=freshProgression();refreshProgressionHud();story39=freshStory39();remainsChunkCache.clear();bossBattle=null;pendingBattle39=null;stamina=MAX_STAMINA;staminaDelay=0;dodgeTime=0;dodgeCooldown=0;swordCharging=false;attackFX=null;enemies.clear();defeatedEnemies.clear();webs.clear();selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();invalidateLights();blueprint.clear();blueprintHistory=[];ghostCells=[];seed=(Math.random()*0x7fffffff)>>>0;worldLayoutVersion=1;layoutCache.clear();layer=0;chunkCache.clear();glowPropCache.clear();mined.clear();fog.clear();vis.clear();stats={mined:0,explored:0,visits:1,transitions:0};ores={piedra:0,tierra:0,cobre:0};visitedLevels=new Set([0]);breakDamage.clear();selectedTile=null;structures.clear();backs.clear();floorTiles.clear();placedBlocks.clear();harvested.clear();groundDrops=[];deathBags=[];mainBase=null;respawn={layer:0,x:.5,y:.5};hp=100;targetCell=null;equipment={head:null,chest:null,legs:null,feet:null,offhand:null};toolRunes={sword:null,pick:null};runeTarget='sword';starterGelGranted=true;startingInventory();refreshHotbar();
+function newGame(){pickCooldown=0;battleFlash=null;activePlaySeconds=0;siteProgress.clear();openSite=null;progression=freshProgression();refreshProgressionHud();story39=freshStory39();remainsChunkCache.clear();bossBattle=null;pendingBattle39=null;stamina=MAX_STAMINA;staminaDelay=0;dodgeTime=0;dodgeCooldown=0;swordCharging=false;attackFX=null;enemies.clear();defeatedEnemies.clear();webs.clear();selectedEnemy=null;dismantleDamage.clear();dismantleFX=null;resetMiningFocus();invalidateLights();blueprint.clear();blueprintHistory=[];ghostCells=[];seed=(Math.random()*0x7fffffff)>>>0;worldLayoutVersion=1;layoutCache.clear();layer=0;chunkCache.clear();glowPropCache.clear();mined.clear();fog.clear();vis.clear();stats={mined:0,explored:0,visits:1,transitions:0};ores={piedra:0,tierra:0,cobre:0};visitedLevels=new Set([0]);breakDamage.clear();selectedTile=null;structures.clear();backs.clear();floorTiles.clear();placedBlocks.clear();harvested.clear();groundDrops=[];deathBags=[];mainBase=null;respawn={layer:0,x:.5,y:.5};hp=100;targetCell=null;equipment={head:null,chest:null,legs:null,feet:null,offhand:null};toolRunes={sword:null,pick:null};runeTarget='sword';starterGelGranted=true;startingInventory();refreshHotbar();
  player={x:START.x,y:START.y,gender:selCharacter,dirX:0,dirY:1,face:'down',walk:0,steps:0,pick:1,weaponTier:0,armorTier:0};screen.camX=player.x;screen.camY=player.y;startPlay();toast('⛏ Toca una pared y mantén PICAR.',2600);}
 function continueGame(s){restore(s);startPlay();toast('Has regresado a '+LEVELS[layer].name,1400,'common');}
 function startPlay(){clearAimSelection();refreshProgressionHud();if(layer===1)seedDungeon();refreshHotbar();refreshLampButton();playing=true;paused=false;refreshCombatUI();UI.menu.classList.add('hidden');UI.hud.classList.remove('hidden');UI.modal.classList.add('hidden');modalType='';reveal();updateHud();updateContext();updateBlueprintUI();queueSave();if(!story39.prologueSeen)openStory39('prologue');else if(pendingBattle39){const saved=pendingBattle39;pendingBattle39=null;startWidowBattle(saved);}try{canvas.focus({preventScroll:true})}catch{}}
@@ -3157,6 +3204,14 @@ function drawPickSwing(t){
  pixRect(arcX+t*.12,arcY-t*.04,t*.08,t*.08,'#789591');
 }
 function drawCombatEffects(t){
+ if(battleFlash?.pick&&battleFlash.until>performance.now()){
+  const p=worldToScreen(battleFlash.x,battleFlash.y);
+  const elapsed=1-(battleFlash.until-performance.now())/390;
+  ctx.save();ctx.font='bold '+Math.max(11,Math.round(t*.43))+'px monospace';ctx.textAlign='center';
+  ctx.lineWidth=3;ctx.strokeStyle='#251711';ctx.fillStyle='#ffe1ad';
+  ctx.strokeText(String(battleFlash.n),p.x,p.y-t*(.65+elapsed*.38));
+  ctx.fillText(String(battleFlash.n),p.x,p.y-t*(.65+elapsed*.38));ctx.restore();
+ }
  if(attackFX&&attackFX.ttl>0){
   const a=worldToScreen(player.x,player.y);
   const ang=Math.atan2(attackFX.dy,attackFX.dx),progress=1-attackFX.ttl/attackFX.max;
@@ -3172,6 +3227,13 @@ function drawCombatEffects(t){
 }
 function drawMiningTarget(t,a){
  if(!a)return;
+ if(a.kind==='creature'){
+  if(!a.reachable)return;
+  const p=worldToScreen(a.enemy.x,a.enemy.y);
+  ctx.save();ctx.strokeStyle='#dda263';ctx.globalAlpha=.8;ctx.lineWidth=1;
+  ctx.strokeRect(Math.floor(p.x-t*.44)+.5,Math.floor(p.y-t*.49)+.5,Math.ceil(t*.88),Math.ceil(t*.79));
+  ctx.restore();return;
+ }
  if(a.kind==='wall'&&!wallCanBeMined(a.type))return;
  if(a.p?.kind==='chest'&&a.p.storage?.some(Boolean))return;
  const key=a.kind==='floor'?floorDismantleKey(a.x,a.y):a.p&&structures.has(a.p.id)?dismantleKey(a.p):null;
@@ -3210,7 +3272,7 @@ function render(t){const w=screen.w,h=screen.h;ctx.setTransform(canvas.width/w,0
  const props=currentProps(true);
  if(handSelection&&!handSelection.error&&handTargetError(tappedHandTarget(props)))handSelection=null;
  const pickEquipped=pickedItem()?.id==='pick';
- const pickTarget=pickEquipped&&canAim()?miningTarget(props):null;
+ const pickTarget=pickEquipped&&canAim()?pickActionTarget(props,mobs):null;
  if(pickEquipped&&canAim())updateContext(pickTarget);
  for(const p of props)if(p.kind!=='platform'&&p.x>=x0-2&&p.x<=x1+2&&p.y>=y0-2&&p.y<=y1+2)entities.push({kind:'prop',y:isWallStructure(p)?p.y+.42:p.y,p});
  for(const d of groundDrops)if(d.layer===layer&&d.x>x0-1&&d.x<x1+1&&d.y>y0-1&&d.y<y1+1)entities.push({kind:'drop',y:d.y,p:d});
@@ -3392,10 +3454,10 @@ canvas.addEventListener('pointerdown',e=>{
   targetCell=null;selectedTile=null;updateBlueprintUI();return;
  }
  if(!inWorld(x,y))return;
- const creature=chooseCreatureAt(x,y);
- if(creature){selectedEnemy=creature.id;targetCell=null;selectedTile=null;updateContext();return;}
- selectedEnemy=null;
  const tool=pickedItem();
+ const creature=tool?.id==='pick'?pickCreatureAt(point):chooseCreatureAt(x,y);
+ if(creature){selectedEnemy=creature.id;if(tool?.id==='pick')pickEnemySelection=creature.id;targetCell=null;selectedTile=null;updateContext();return;}
+ selectedEnemy=null;
  if(tool?.id==='pick'){
   // El borde de una casilla revestida selecciona el piso; el centro conserva la prioridad del objeto.
   const preferFloor=!!structureAt(x,y)&&Math.max(Math.abs(point.x-x-.5),Math.abs(point.y-y-.5))>=.25;
